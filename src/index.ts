@@ -24,7 +24,12 @@ app.get('/', async (c) => {
     return c.text('Missing x-firmware-variant header', 400)
   }
 
-  const data = await fetch(`https://api.github.com/repos/${projectData.repository_slug}/releases/latest`)
+  const data = await fetch(`https://api.github.com/repos/${projectData.repository_slug}/releases/latest`, {
+    headers: {
+      'Accept': 'application/vnd.github.v3+json',
+      'User-Agent': 'Koios OTA Updater',
+    }
+  })
 
   if (!data.ok) {
     return c.text(`Error fetching data from GitHub: ${data.statusText}`, 500)
