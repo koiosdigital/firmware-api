@@ -1,14 +1,17 @@
 {
+  "name": "pki-api",
   "scripts": {
-    "dev": "wrangler dev src/index.ts",
-    "deploy": "wrangler deploy --minify src/index.ts"
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy --minify",
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings"
   },
   "dependencies": {
-    "hono": "^3.11.7",
-    "latest-semver": "^4.0.0"
+    "@types/node": "^22.14.1",
+    "hono": "^4.7.7"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20230518.0",
-    "wrangler": "^3.19.0"
-  }
+    "@cloudflare/workers-types": "^4.20250419.0",
+    "wrangler": "^4.4.0"
+  },
+  "packageManager": "pnpm@10.5.2+sha512.da9dc28cd3ff40d0592188235ab25d3202add8a207afbedc682220e4a0029ffbff4562102b9e6e46b4e3f9e8bd53e6d05de48544b0c57d4b0179e22c76d1199b"
 }
