@@ -74,22 +74,10 @@ app.get('/', async (c) => {
 
   const assetURL = asset.browser_download_url
 
-  //split into proto, host, port, and path
-  const url = new URL(assetURL)
-  const host = url.host
-  const port = url.port
-  const path = url.pathname
-  const proto = url.protocol.replace(':', '')
-
   return c.json({
     error: false,
     update_available: true,
     ota_url: assetURL,
-    //for backwards compatibility
-    ota_host: host,
-    ota_port: port,
-    ota_path: path,
-    ota_proto: proto,
   })
 
 })
