@@ -11,5 +11,11 @@ export const projects: Project[] = [
         supports_variants: true,
         repository_slug: 'koiosdigital/MATRX-fw',
         name: 'MATRX Firmware',
+    },
+    {
+        slug: 'LANTERN-fw',
+        supports_variants: false,
+        repository_slug: 'koiosdigital/LANTERN-fw',
+        name: 'LANTERN Firmware',
     }
 ]

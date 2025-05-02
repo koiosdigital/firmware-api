@@ -1,7 +1,61 @@
 import { Hono } from 'hono'
 import { projects } from './projects'
+import { cors } from 'hono/cors';
 
 const app = new Hono()
+
+//cors
+app.use("*", cors());
+
+app.get('/projects', (c) => {
+  return c.json(projects)
+})
+
+app.get('/projects/:slug', async (c) => {
+  const slug = c.req.param('slug')
+  const project = projects.find((p) => p.slug === slug)
+  if (!project) {
+    return c.text(`Project ${slug} not found`, 404)
+  }
+
+  if (!project.supports_variants) {
+    return c.json({
+      ...project,
+      variants: [],
+    })
+  }
+
+  //Fetch the latest release from GitHub
+  const data = await fetch(`https://api.github.com/repos/${project.repository_slug}/releases/latest`, {
+    headers: {
+      'Accept': 'application/vnd.github.v3+json',
+      'User-Agent': 'Koios OTA Updater',
+    }
+  })
+
+  if (!data.ok) {
+    return c.text(`Error fetching data from GitHub: ${data.statusText}`, 500)
+  }
+
+  const json = await data.json() as any
+
+  //Get all variant names from assets (__variant__ _app.bin), set as array of objetcs with name and url
+  const variants = json.assets.map((a: any) => {
+    const match = a.name.match(/^(.*)_merged\.bin$/)
+    if (match) {
+      return {
+        name: match[1],
+        url: a.browser_download_url,
+      }
+    }
+  }
+  ).filter((v: any) => v !== undefined)
+
+  return c.json({
+    ...project,
+    variants: variants,
+  })
+})
 
 app.get('/', async (c) => {
   const project = c.req.header('x-firmware-project')
