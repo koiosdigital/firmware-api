@@ -18,13 +18,6 @@ app.get('/projects/:slug', async (c) => {
     return c.text(`Project ${slug} not found`, 404)
   }
 
-  if (!project.supports_variants) {
-    return c.json({
-      ...project,
-      variants: [],
-    })
-  }
-
   //Fetch the latest release from GitHub
   const data = await fetch(`https://api.github.com/repos/${project.repository_slug}/releases/latest`, {
     headers: {
