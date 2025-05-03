@@ -32,9 +32,8 @@ app.get('/projects/:slug', async (c) => {
 
   const json = await data.json() as any
 
-  //Get all variant names from assets (__variant__ _app.bin), set as array of objetcs with name and url
   const variants = json.assets.map((a: any) => {
-    const match = a.name.match(/^(.*)_merged\.hex$/)
+    const match = a.name.match(/^(.*)_factory\.zip$/)
     if (match) {
       return {
         name: match[1],
