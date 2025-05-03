@@ -34,7 +34,7 @@ app.get('/projects/:slug', async (c) => {
 
   //Get all variant names from assets (__variant__ _app.bin), set as array of objetcs with name and url
   const variants = json.assets.map((a: any) => {
-    const match = a.name.match(/^(.*)_merged\.bin$/)
+    const match = a.name.match(/^(.*)_merged\.hex$/)
     if (match) {
       return {
         name: match[1],
@@ -126,7 +126,29 @@ app.get('/', async (c) => {
     update_available: true,
     ota_url: assetURL,
   })
+})
 
+app.get('/mirror/:encodedURL', async (c) => {
+  const encodedURL = c.req.param('encodedURL')
+  const url = decodeURIComponent(encodedURL)
+  const data = await fetch(url, {
+    headers: {
+      'User-Agent': 'Koios OTA Updater',
+    }
+  })
+  if (!data.ok) {
+    return c.text(`Error fetching data from URL: ${data.statusText}`, 500)
+  }
+
+  const buffer = await data.arrayBuffer()
+
+  //return file
+  c.res.headers.set('Content-Type', 'application/x-x509-ca-cert')
+  c.res.headers.set('Content-Disposition', `attachment; filename="${url.split('/').pop()}"`)
+  c.res.headers.set('Content-Length', buffer.byteLength.toString())
+  c.res.headers.set('Cache-Control', 'no-store')
+
+  return c.body(buffer, 200)
 })
 
 export default app

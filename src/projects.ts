@@ -14,7 +14,7 @@ export const projects: Project[] = [
     },
     {
         slug: 'LANTERN-fw',
-        supports_variants: false,
+        supports_variants: true,
         repository_slug: 'koiosdigital/LANTERN-fw',
         name: 'LANTERN Firmware',
     }
