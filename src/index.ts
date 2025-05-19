@@ -7,6 +7,8 @@ const app = new Hono()
 //cors
 app.use("*", cors());
 
+//MARK: Firmware OTA
+
 app.get('/projects', (c) => {
   return c.json(projects)
 })
@@ -127,6 +129,7 @@ app.get('/', async (c) => {
   })
 })
 
+//for koios factory
 app.get('/mirror/:encodedURL', async (c) => {
   const encodedURL = c.req.param('encodedURL')
   const url = decodeURIComponent(encodedURL)
@@ -148,6 +151,26 @@ app.get('/mirror/:encodedURL', async (c) => {
   c.res.headers.set('Cache-Control', 'no-store')
 
   return c.body(buffer, 200)
+})
+
+//MARK: Timezone
+app.get('/tz', async (c) => {
+  const clientIP = c.req.header("Cf-Connecting-IP");
+  const TZAPIKEY = "10b49e4e1bec4a718155b4c4db6a21b9";
+
+  const tzinfo = await fetch(`https://api.ipgeolocation.io/v2/timezone?apiKey=${TZAPIKEY}&ip=${clientIP}`)
+
+  if (!tzinfo.ok) {
+    return c.status(500);
+  }
+
+  const json = await tzinfo.json() as any;
+
+
+  //geolocate
+  return c.json({
+    tzname: json.time_zone.name as string
+  })
 })
 
 export default app
