@@ -117,7 +117,11 @@ app.get('/', async (c) => {
 
   const asset = json.assets.find((a: any) => a.name === assetName)
   if (!asset) {
-    return c.text(`Error fetching asset from GitHub: ${assetName}`, 500)
+    return c.json({
+      error: true,
+      update_available: false,
+      error_message: `No asset found for ${assetName} in release ${json.tag_name}`,
+    })
   }
 
   const assetURL = asset.browser_download_url

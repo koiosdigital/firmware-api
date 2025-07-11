@@ -17,5 +17,11 @@ export const projects: Project[] = [
         supports_variants: true,
         repository_slug: 'koiosdigital/LANTERN-fw',
         name: 'LANTERN Firmware',
+    },
+    {
+        slug: 'clock-fw',
+        supports_variants: true,
+        repository_slug: 'acvigue/clock-fw',
+        name: 'Clock Firmware',
     }
 ]
