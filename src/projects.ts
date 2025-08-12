@@ -21,7 +21,13 @@ export const projects: Project[] = [
     {
         slug: 'clock-fw',
         supports_variants: true,
-        repository_slug: 'acvigue/clock-fw',
-        name: 'Clock Firmware',
+        repository_slug: 'koiosdigital/CLOCK-fw',
+        name: 'CLOCK Firmware',
+    },
+    {
+        slug: 'tranquil-fw',
+        supports_variants: true,
+        repository_slug: 'koiosdigital/tranquil-fw',
+        name: 'tranquil Firmware',
     }
 ]

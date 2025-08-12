@@ -54,7 +54,7 @@ app.get('/projects/:slug', async (c) => {
 app.get('/', async (c) => {
   const project = c.req.header('x-firmware-project')
   const currentVersion = c.req.header('x-firmware-version')
-  const projectVariant = c.req.header('x-firmware-variant')
+  let projectVariant = c.req.header('x-firmware-variant')
 
   if (!project) {
     return c.text('Missing x-firmware-project header', 400)
@@ -162,7 +162,7 @@ app.get('/tz', async (c) => {
   const clientIP = c.req.header("Cf-Connecting-IP");
   const TZAPIKEY = "10b49e4e1bec4a718155b4c4db6a21b9";
 
-  const tzinfo = await fetch(`https://api.ipgeolocation.io/v2/timezone?apiKey=${TZAPIKEY}&ip=${clientIP}`)
+  const tzinfo = await fetch(`https://api.ipquery.io/${clientIP}`)
 
   if (!tzinfo.ok) {
     return c.status(500);
@@ -173,7 +173,7 @@ app.get('/tz', async (c) => {
 
   //geolocate
   return c.json({
-    tzname: json.time_zone.name as string
+    tzname: json.location.timezone as string
   })
 })
 
