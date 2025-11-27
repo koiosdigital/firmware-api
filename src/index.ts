@@ -125,6 +125,13 @@ app.get('/', async (c) => {
     //return c.text('Missing x-device-identity header', 400)
   }
 
+  if (currentVersion === '0.0.1') {
+    return c.json({
+      error: false,
+      update_available: false
+    })
+  }
+
   const projectData = projects.find((p) => p.slug === project)
   if (!projectData) {
     return c.text(`Project ${project} not found`, 404)
