@@ -1,9 +1,4 @@
-export interface Project {
-    slug: string
-    supports_variants: boolean
-    repository_slug: string
-    name: string
-}
+import type { Project } from './types'
 
 export const projects: Project[] = [
     {
