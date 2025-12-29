@@ -67,7 +67,8 @@ export async function getManifest(
 
 /**
  * Download and store release assets from GitHub to R2, and record in D1
- * Only processes assets that haven't been seen before (by asset ID)
+ * Only processes manifests that haven't been seen before (by asset ID)
+ * Reads each manifest to determine which files to download
  */
 export async function syncReleaseToR2(
     bucket: R2Bucket,
@@ -81,50 +82,95 @@ export async function syncReleaseToR2(
     const variantsSet = new Set<string>()
     const errors: string[] = []
 
-    // Filter to firmware assets only
-    const firmwareAssets = release.assets.filter(
-        (asset) => isFirmwareAsset(asset.name) && parseVariantFromAsset(asset.name)
-    )
+    // Build a map of asset name -> asset for quick lookup
+    const assetMap = new Map(release.assets.map((a) => [a.name, a]))
 
-    // Check which assets we've already processed
-    const assetIds = firmwareAssets.map((a) => a.id)
-    const processedIds = await getProcessedAssetIds(db, assetIds)
-    const newAssets = firmwareAssets.filter((a) => !processedIds.has(a.id))
-    const skipped = firmwareAssets.length - newAssets.length
+    // Find manifest files (e.g., "matrx_v9_64x128_manifest.json")
+    const manifestAssets = release.assets.filter((a) => a.name.endsWith('_manifest.json'))
 
-    for (const asset of newAssets) {
-        const variant = parseVariantFromAsset(asset.name)!
+    // Check which manifests we've already processed
+    const manifestIds = manifestAssets.map((a) => a.id)
+    const processedIds = await getProcessedAssetIds(db, manifestIds)
+    const newManifests = manifestAssets.filter((a) => !processedIds.has(a.id))
+    const skipped = manifestAssets.length - newManifests.length
+
+    for (const manifestAsset of newManifests) {
+        // Parse variant from manifest filename (e.g., "matrx_v9_64x128_manifest.json" -> "matrx_v9_64x128")
+        const variant = manifestAsset.name.replace('_manifest.json', '')
         variantsSet.add(variant)
 
         try {
-            const response = await fetch(asset.browser_download_url, {
-                headers: {
-                    'User-Agent': 'Koios OTA Updater',
-                },
+            // Download and parse the manifest
+            const manifestResponse = await fetch(manifestAsset.browser_download_url, {
+                headers: { 'User-Agent': 'Koios OTA Updater' },
             })
-
-            if (!response.ok) {
-                errors.push(`Failed to fetch ${asset.name}: ${response.statusText}`)
+            if (!manifestResponse.ok) {
+                errors.push(`Failed to fetch ${manifestAsset.name}: ${manifestResponse.statusText}`)
                 continue
             }
 
-            const data = await response.arrayBuffer()
-            await storeFirmware(
-                bucket,
-                projectSlug,
-                variant,
-                version,
-                asset.name,
-                data,
-                asset.content_type
-            )
-            stored.push(asset.name)
+            const manifestData = await manifestResponse.arrayBuffer()
+            const manifestJson = JSON.parse(new TextDecoder().decode(manifestData)) as FirmwareManifest
 
-            // Mark asset as processed
-            await markAssetProcessed(db, asset.id, projectId)
+            // Store the manifest as "manifest.json" (canonical name)
+            await storeFirmware(bucket, projectSlug, variant, version, 'manifest.json', manifestData, 'application/json')
+            stored.push(manifestAsset.name)
+
+            // Find all referenced files from the manifest
+            const referencedFiles = new Set<string>()
+            if (manifestJson.builds && Array.isArray(manifestJson.builds)) {
+                for (const build of manifestJson.builds) {
+                    if (build.parts && Array.isArray(build.parts)) {
+                        for (const part of build.parts) {
+                            if (part.path && typeof part.path === 'string') {
+                                referencedFiles.add(part.path)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Download and store each referenced file
+            for (const filename of referencedFiles) {
+                // The manifest references files like "matrx_v9_64x128_bootloader.bin"
+                const asset = assetMap.get(filename)
+                if (!asset) {
+                    errors.push(`Referenced file not found in release: ${filename}`)
+                    continue
+                }
+
+                const fileResponse = await fetch(asset.browser_download_url, {
+                    headers: { 'User-Agent': 'Koios OTA Updater' },
+                })
+                if (!fileResponse.ok) {
+                    errors.push(`Failed to fetch ${filename}: ${fileResponse.statusText}`)
+                    continue
+                }
+
+                const fileData = await fileResponse.arrayBuffer()
+                await storeFirmware(bucket, projectSlug, variant, version, filename, fileData, asset.content_type)
+                stored.push(filename)
+            }
+
+            // Also store the ELF file if present (for coredump analysis)
+            const elfFilename = `${variant}.elf`
+            const elfAsset = assetMap.get(elfFilename)
+            if (elfAsset) {
+                const elfResponse = await fetch(elfAsset.browser_download_url, {
+                    headers: { 'User-Agent': 'Koios OTA Updater' },
+                })
+                if (elfResponse.ok) {
+                    const elfData = await elfResponse.arrayBuffer()
+                    await storeFirmware(bucket, projectSlug, variant, version, elfFilename, elfData, elfAsset.content_type)
+                    stored.push(elfFilename)
+                }
+            }
+
+            // Mark manifest as processed
+            await markAssetProcessed(db, manifestAsset.id, projectId)
         } catch (error) {
             const message = error instanceof Error ? error.message : 'Unknown error'
-            errors.push(`Error storing ${asset.name}: ${message}`)
+            errors.push(`Error processing ${manifestAsset.name}: ${message}`)
         }
     }
 
@@ -140,26 +186,4 @@ export async function syncReleaseToR2(
     }
 
     return { stored, skipped, variants, errors }
-}
-
-/**
- * Check if an asset is a firmware-related file
- */
-function isFirmwareAsset(filename: string): boolean {
-    const firmwareExtensions = ['.bin', '.elf', '_manifest.json']
-    return firmwareExtensions.some((ext) => filename.endsWith(ext))
-}
-
-/**
- * Parse variant name from asset filename
- * e.g., "MATRX_MINI_manifest.json" -> "MATRX_MINI"
- */
-function parseVariantFromAsset(filename: string): string | null {
-    if (filename.endsWith('_manifest.json')) {
-        return filename.replace('_manifest.json', '')
-    }
-    // For .bin files, try to extract variant before the extension
-    // This is a best-effort match
-    const match = filename.match(/^(.+?)(?:[-_]app)?\.bin$/i)
-    return match?.[1] ?? null
 }
