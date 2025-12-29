@@ -128,3 +128,61 @@ export async function getLatestVersion(
 
     return result?.version ?? null
 }
+
+export interface VariantInfo {
+    variant: string
+    latest_version: string
+    release_count: number
+}
+
+/**
+ * Get all variants for a project with their latest version
+ */
+export async function getVariantsWithLatest(
+    db: D1Database,
+    projectSlug: string
+): Promise<VariantInfo[]> {
+    const result = await db.prepare(`
+        SELECT
+            r.variant,
+            (
+                SELECT r2.version
+                FROM releases r2
+                WHERE r2.project_id = r.project_id AND r2.variant = r.variant
+                ORDER BY r2.major DESC, r2.minor DESC, r2.patch DESC
+                LIMIT 1
+            ) as latest_version,
+            COUNT(*) as release_count
+        FROM releases r
+        JOIN projects p ON p.id = r.project_id
+        WHERE p.slug = ?
+        GROUP BY r.variant
+        ORDER BY r.variant
+    `).bind(projectSlug).all<VariantInfo>()
+
+    return result.results
+}
+
+export interface VersionInfo {
+    version: string
+    created_at: string
+}
+
+/**
+ * Get all versions for a project/variant (sorted by semver descending)
+ */
+export async function getVersions(
+    db: D1Database,
+    projectSlug: string,
+    variant: string
+): Promise<VersionInfo[]> {
+    const result = await db.prepare(`
+        SELECT r.version, r.created_at
+        FROM releases r
+        JOIN projects p ON p.id = r.project_id
+        WHERE p.slug = ? AND r.variant = ?
+        ORDER BY r.major DESC, r.minor DESC, r.patch DESC
+    `).bind(projectSlug, variant).all<VersionInfo>()
+
+    return result.results
+}

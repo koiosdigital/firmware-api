@@ -21,8 +21,9 @@ import {
     getAllProjects,
     getProjectBySlug,
     upsertProject,
-    getVariants,
+    getVariantsWithLatest,
     getLatestVersion,
+    getVersions,
 } from './db'
 
 const R2_PUBLIC_URL = 'https://otafiles.koiosdigital.net'
@@ -59,12 +60,17 @@ app.get('/projects/:slug', async (c) => {
         return jsonError(c, 404, `Project ${slug} not found`)
     }
 
-    const variants = await getVariants(c.env.DB, slug)
+    const variants = await getVariantsWithLatest(c.env.DB, slug)
 
     return c.json({
+        slug: project.slug,
         name: project.name,
-        repo: project.repository_slug,
-        variants,
+        repository: project.repository_slug,
+        variants: variants.map((v) => ({
+            name: v.variant,
+            latest_version: v.latest_version,
+            release_count: v.release_count,
+        })),
     })
 })
 
@@ -82,37 +88,23 @@ app.get('/projects/:slug/:variant', async (c) => {
         return jsonError(c, 404, `Project ${slug} not found`)
     }
 
-    const latestVersion = await getLatestVersion(c.env.DB, slug, variant)
-    if (!latestVersion) {
+    const versions = await getVersions(c.env.DB, slug, variant)
+    if (versions.length === 0) {
         return jsonError(c, 404, `No releases found for variant ${variant}`)
     }
 
-    const manifest = await getManifest(c.env.FIRMWARE, slug, variant, latestVersion)
-    if (!manifest) {
-        return jsonError(c, 404, `Manifest not found for ${variant}`)
-    }
+    const latestVersion = versions[0].version
 
-    // Rewrite URLs to absolute R2 public URLs
-    if (manifest.builds && Array.isArray(manifest.builds)) {
-        const baseUrl = `${R2_PUBLIC_URL}/firmware/${slug}/${variant}/${latestVersion}/`
-        manifest.builds = manifest.builds.map((build) => {
-            if (!build || typeof build !== 'object') return build
-            if (!Array.isArray(build.parts)) return build
-            return {
-                ...build,
-                parts: build.parts.map((part) => {
-                    if (!part || typeof part !== 'object') return part
-                    const path = typeof part.path === 'string' ? part.path : undefined
-                    return {
-                        ...part,
-                        path: path ? baseUrl + path : path,
-                    }
-                }),
-            }
-        })
-    }
-
-    return c.json(manifest)
+    return c.json({
+        project: project.slug,
+        variant,
+        latest_version: latestVersion,
+        versions: versions.map((v) => ({
+            version: v.version,
+            created_at: v.created_at,
+            manifest_url: `${R2_PUBLIC_URL}/firmware/${slug}/${variant}/${v.version}/manifest.json`,
+        })),
+    })
 })
 
 // MARK: - OTA Update Check

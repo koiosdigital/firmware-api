@@ -7,8 +7,8 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
         openapi: '3.1.0',
         info: {
             title: 'Koios Firmware API',
-            version: '2.0.0',
-            description: 'Firmware OTA, storage, and diagnostic endpoints for Koios devices.',
+            version: '3.0.0',
+            description: 'Firmware OTA, storage, and diagnostic endpoints for Koios devices. Projects and releases are auto-discovered from GitHub webhooks.',
         },
         paths: {
             '/swagger.json': {
@@ -22,7 +22,7 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
             },
             '/projects': {
                 get: {
-                    summary: 'List firmware projects',
+                    summary: 'List all firmware projects',
                     tags: ['Projects'],
                     responses: {
                         '200': {
@@ -44,40 +44,44 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
             },
             '/projects/{slug}': {
                 get: {
-                    summary: 'Get variants for a project',
+                    summary: 'Get project details with variants',
                     tags: ['Projects'],
+                    description: 'Returns project info with all variants and their latest versions.',
                     parameters: [
-                        { name: 'slug', in: 'path', required: true, schema: { type: 'string' } },
+                        { name: 'slug', in: 'path', required: true, schema: { type: 'string' }, description: 'Project slug (e.g., "matrx-fw")' },
                     ],
                     responses: {
                         '200': {
-                            description: 'Project info and variants',
+                            description: 'Project info with variants',
                             content: {
                                 'application/json': {
-                                    schema: { $ref: '#/components/schemas/ProjectVariantsResponse' },
+                                    schema: { $ref: '#/components/schemas/ProjectDetailsResponse' },
                                 },
                             },
                         },
                         '404': { description: 'Project not found' },
-                        '502': { description: 'Upstream GitHub error' },
                     },
                 },
             },
             '/projects/{slug}/{variant}': {
                 get: {
-                    summary: 'Get manifest for a project variant',
+                    summary: 'Get variant details with all versions',
                     tags: ['Projects'],
+                    description: 'Returns variant info with all available versions sorted by semver.',
                     parameters: [
-                        { name: 'slug', in: 'path', required: true, schema: { type: 'string' } },
-                        { name: 'variant', in: 'path', required: true, schema: { type: 'string' } },
+                        { name: 'slug', in: 'path', required: true, schema: { type: 'string' }, description: 'Project slug' },
+                        { name: 'variant', in: 'path', required: true, schema: { type: 'string' }, description: 'Variant name (e.g., "MATRX_MINI")' },
                     ],
                     responses: {
                         '200': {
-                            description: 'Firmware manifest JSON (URLs rewritten to absolute)',
-                            content: { 'application/json': { schema: { type: 'object' } } },
+                            description: 'Variant info with versions',
+                            content: {
+                                'application/json': {
+                                    schema: { $ref: '#/components/schemas/VariantDetailsResponse' },
+                                },
+                            },
                         },
-                        '404': { description: 'Project/variant not found' },
-                        '502': { description: 'Upstream GitHub error' },
+                        '404': { description: 'Project or variant not found' },
                     },
                 },
             },
@@ -86,13 +90,11 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
                     summary: 'OTA update check (header-driven)',
                     tags: ['OTA'],
                     description:
-                        'Requires x-firmware-project and x-firmware-version headers. If project supports variants, also requires x-firmware-variant.',
+                        'Checks if a firmware update is available. Requires x-firmware-project and x-firmware-version headers. Use x-firmware-variant for multi-variant projects.',
                     parameters: [
-                        { name: 'x-firmware-project', in: 'header', required: true, schema: { type: 'string' } },
-                        { name: 'x-firmware-version', in: 'header', required: true, schema: { type: 'string' } },
-                        { name: 'x-firmware-variant', in: 'header', required: false, schema: { type: 'string' } },
-                        { name: 'x-device-mac-address', in: 'header', required: false, schema: { type: 'string' } },
-                        { name: 'x-device-identity', in: 'header', required: false, schema: { type: 'string' } },
+                        { name: 'x-firmware-project', in: 'header', required: true, schema: { type: 'string' }, description: 'Project slug' },
+                        { name: 'x-firmware-version', in: 'header', required: true, schema: { type: 'string' }, description: 'Current firmware version (semver)' },
+                        { name: 'x-firmware-variant', in: 'header', required: false, schema: { type: 'string' }, description: 'Firmware variant' },
                     ],
                     responses: {
                         '200': {
@@ -100,30 +102,15 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
                             content: { 'application/json': { schema: { $ref: '#/components/schemas/FirmwareUpdateResponse' } } },
                         },
                         '400': { description: 'Missing/invalid headers' },
-                        '404': { description: 'Unknown project' },
-                        '502': { description: 'Upstream GitHub error' },
-                    },
-                },
-            },
-            '/mirror/{encodedURL}': {
-                get: {
-                    summary: 'Mirror a GitHub download URL (restricted)',
-                    tags: ['OTA'],
-                    parameters: [
-                        { name: 'encodedURL', in: 'path', required: true, schema: { type: 'string' } },
-                    ],
-                    responses: {
-                        '200': { description: 'Binary response' },
-                        '400': { description: 'Invalid URL' },
-                        '403': { description: 'Host not allowed' },
+                        '404': { description: 'Unknown project or no releases found' },
                     },
                 },
             },
             '/firmware/{project}/{variant}/{version}/{filename}': {
                 get: {
-                    summary: 'Download firmware from R2 storage',
+                    summary: 'Redirect to firmware file in R2',
                     tags: ['Storage'],
-                    description: 'Serves firmware binaries from Cloudflare R2 storage with immutable caching.',
+                    description: 'Redirects to the public R2 URL for the requested firmware file.',
                     parameters: [
                         { name: 'project', in: 'path', required: true, schema: { type: 'string' } },
                         { name: 'variant', in: 'path', required: true, schema: { type: 'string' } },
@@ -131,12 +118,13 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
                         { name: 'filename', in: 'path', required: true, schema: { type: 'string' } },
                     ],
                     responses: {
-                        '200': {
-                            description: 'Firmware binary',
-                            content: { 'application/octet-stream': {} },
+                        '302': {
+                            description: 'Redirect to R2 public URL',
+                            headers: {
+                                Location: { schema: { type: 'string' }, description: 'R2 public URL' },
+                            },
                         },
                         '400': { description: 'Invalid parameters' },
-                        '404': { description: 'Firmware not found' },
                     },
                 },
             },
@@ -144,7 +132,7 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
                 post: {
                     summary: 'GitHub release webhook',
                     tags: ['Webhooks'],
-                    description: 'Receives GitHub release webhook events and syncs firmware to R2 storage. Requires X-Hub-Signature-256 header.',
+                    description: 'Receives GitHub release webhook events. Auto-creates projects and syncs firmware assets to R2 storage. Requires X-Hub-Signature-256 header.',
                     requestBody: {
                         required: true,
                         content: {
@@ -171,7 +159,7 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
                 post: {
                     summary: 'Analyze ESP-IDF coredump',
                     tags: ['Diagnostics'],
-                    description: 'Parses ESP-IDF coredump data and extracts crash information. Returns raw addresses for local addr2line decoding.',
+                    description: 'Parses ESP-IDF coredump data and extracts crash information. Returns raw addresses for local addr2line decoding with the ELF file.',
                     requestBody: {
                         required: true,
                         content: {
@@ -196,7 +184,7 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
             },
             '/tz': {
                 get: {
-                    summary: 'Return client timezone (via IP geolocation)',
+                    summary: 'Get client timezone via IP geolocation',
                     tags: ['Utilities'],
                     responses: {
                         '200': {
@@ -213,21 +201,56 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
             schemas: {
                 Project: {
                     type: 'object',
-                    required: ['slug', 'supports_variants', 'repository_slug', 'name'],
+                    required: ['id', 'slug', 'repository_slug', 'name', 'created_at', 'updated_at'],
                     properties: {
-                        slug: { type: 'string' },
-                        supports_variants: { type: 'boolean' },
-                        repository_slug: { type: 'string' },
-                        name: { type: 'string' },
+                        id: { type: 'integer' },
+                        slug: { type: 'string', description: 'Unique project identifier' },
+                        repository_slug: { type: 'string', description: 'GitHub repository (e.g., "koiosdigital/matrx-fw")' },
+                        name: { type: 'string', description: 'Display name' },
+                        created_at: { type: 'string', format: 'date-time' },
+                        updated_at: { type: 'string', format: 'date-time' },
                     },
                 },
-                ProjectVariantsResponse: {
+                ProjectDetailsResponse: {
                     type: 'object',
-                    required: ['name', 'repo', 'variants'],
+                    required: ['slug', 'name', 'repository', 'variants'],
                     properties: {
+                        slug: { type: 'string' },
                         name: { type: 'string' },
-                        repo: { type: 'string' },
-                        variants: { type: 'array', items: { type: 'string' } },
+                        repository: { type: 'string' },
+                        variants: {
+                            type: 'array',
+                            items: {
+                                type: 'object',
+                                required: ['name', 'latest_version', 'release_count'],
+                                properties: {
+                                    name: { type: 'string', description: 'Variant name' },
+                                    latest_version: { type: 'string', description: 'Latest semver version' },
+                                    release_count: { type: 'integer', description: 'Number of releases for this variant' },
+                                },
+                            },
+                        },
+                    },
+                },
+                VariantDetailsResponse: {
+                    type: 'object',
+                    required: ['project', 'variant', 'latest_version', 'versions'],
+                    properties: {
+                        project: { type: 'string' },
+                        variant: { type: 'string' },
+                        latest_version: { type: 'string' },
+                        versions: {
+                            type: 'array',
+                            items: {
+                                type: 'object',
+                                required: ['version', 'created_at', 'manifest_url'],
+                                properties: {
+                                    version: { type: 'string' },
+                                    created_at: { type: 'string', format: 'date-time' },
+                                    manifest_url: { type: 'string', format: 'uri', description: 'Direct URL to manifest.json in R2' },
+                                },
+                            },
+                        },
                     },
                 },
                 FirmwareUpdateResponse: {
@@ -246,7 +269,7 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
                             properties: {
                                 error: { const: false },
                                 update_available: { const: true },
-                                ota_url: { type: 'string' },
+                                ota_url: { type: 'string', format: 'uri' },
                             },
                         },
                         {
@@ -264,17 +287,18 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
                     type: 'object',
                     required: ['tzname'],
                     properties: {
-                        tzname: { type: 'string' },
+                        tzname: { type: 'string', description: 'IANA timezone name' },
                     },
                 },
                 GitHubWebhookPayload: {
                     type: 'object',
                     properties: {
-                        action: { type: 'string' },
+                        action: { type: 'string', description: 'Event action (e.g., "published")' },
                         release: {
                             type: 'object',
                             properties: {
                                 tag_name: { type: 'string' },
+                                name: { type: 'string' },
                                 assets: {
                                     type: 'array',
                                     items: {
@@ -282,6 +306,7 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
                                         properties: {
                                             name: { type: 'string' },
                                             browser_download_url: { type: 'string' },
+                                            content_type: { type: 'string' },
                                         },
                                     },
                                 },
@@ -301,15 +326,15 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
                         message: { type: 'string' },
                         project: { type: 'string' },
                         version: { type: 'string' },
-                        stored: { type: 'array', items: { type: 'string' } },
-                        errors: { type: 'array', items: { type: 'string' } },
+                        stored: { type: 'array', items: { type: 'string' }, description: 'Files stored in R2' },
+                        errors: { type: 'array', items: { type: 'string' }, description: 'Any errors encountered' },
                     },
                 },
                 CoredumpRequest: {
                     type: 'object',
                     required: ['project', 'variant', 'version', 'coredump'],
                     properties: {
-                        project: { type: 'string', description: 'Project slug (e.g., "MATRX-fw")' },
+                        project: { type: 'string', description: 'Project slug (e.g., "matrx-fw")' },
                         variant: { type: 'string', description: 'Firmware variant (e.g., "MATRX_MINI")' },
                         version: { type: 'string', description: 'Firmware version (e.g., "1.2.3")' },
                         coredump: { type: 'string', description: 'Base64-encoded coredump data' },
@@ -323,15 +348,15 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
                             type: 'object',
                             properties: {
                                 exception_cause: { type: 'string' },
-                                pc: { type: 'string' },
+                                pc: { type: 'string', description: 'Program counter (hex)' },
                                 registers: {
                                     type: 'object',
                                     additionalProperties: { type: 'string' },
                                 },
                             },
                         },
-                        backtrace: { type: 'array', items: { type: 'string' } },
-                        elf_download_url: { type: 'string' },
+                        backtrace: { type: 'array', items: { type: 'string' }, description: 'Backtrace addresses (hex)' },
+                        elf_download_url: { type: 'string', format: 'uri', description: 'URL to download ELF for addr2line' },
                         error: { type: 'string' },
                     },
                 },
@@ -339,9 +364,9 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
         },
         tags: [
             { name: 'OTA', description: 'Over-the-air firmware update endpoints' },
-            { name: 'Projects', description: 'Firmware project management' },
-            { name: 'Storage', description: 'R2 firmware storage' },
-            { name: 'Webhooks', description: 'GitHub webhook integration' },
+            { name: 'Projects', description: 'Firmware project and variant discovery' },
+            { name: 'Storage', description: 'R2 firmware file storage' },
+            { name: 'Webhooks', description: 'GitHub webhook integration for auto-sync' },
             { name: 'Diagnostics', description: 'Device diagnostic tools' },
             { name: 'Utilities', description: 'Utility endpoints' },
             { name: 'Documentation', description: 'API documentation' },
