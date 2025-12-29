@@ -50,17 +50,17 @@ app.get('/swagger.json', async (c) => {
     return c.json(buildOpenApiDocument({ projects }), 200)
 })
 
-app.get('/projects/:slug', async (c) => {
-    const slug = c.req.param('slug')
-    if (!isSafeIdentifier(slug)) {
-        return jsonError(c, 400, 'Invalid project slug')
+app.get('/projects/:project', async (c) => {
+    const projectSlug = c.req.param('project')
+    if (!isSafeIdentifier(projectSlug)) {
+        return jsonError(c, 400, 'Invalid project')
     }
-    const project = await getProjectBySlug(c.env.DB, slug)
+    const project = await getProjectBySlug(c.env.DB, projectSlug)
     if (!project) {
-        return jsonError(c, 404, `Project ${slug} not found`)
+        return jsonError(c, 404, `Project ${projectSlug} not found`)
     }
 
-    const variants = await getVariantsWithLatest(c.env.DB, slug)
+    const variants = await getVariantsWithLatest(c.env.DB, projectSlug)
 
     return c.json({
         slug: project.slug,
@@ -74,21 +74,21 @@ app.get('/projects/:slug', async (c) => {
     })
 })
 
-app.get('/projects/:slug/:variant', async (c) => {
-    const slug = c.req.param('slug')
+app.get('/projects/:project/:variant', async (c) => {
+    const projectSlug = c.req.param('project')
     const variant = c.req.param('variant')
-    if (!isSafeIdentifier(slug)) {
-        return jsonError(c, 400, 'Invalid project slug')
+    if (!isSafeIdentifier(projectSlug)) {
+        return jsonError(c, 400, 'Invalid project')
     }
     if (!isSafeIdentifier(variant)) {
         return jsonError(c, 400, 'Invalid variant')
     }
-    const project = await getProjectBySlug(c.env.DB, slug)
+    const project = await getProjectBySlug(c.env.DB, projectSlug)
     if (!project) {
-        return jsonError(c, 404, `Project ${slug} not found`)
+        return jsonError(c, 404, `Project ${projectSlug} not found`)
     }
 
-    const versions = await getVersions(c.env.DB, slug, variant)
+    const versions = await getVersions(c.env.DB, projectSlug, variant)
     if (versions.length === 0) {
         return jsonError(c, 404, `No releases found for variant ${variant}`)
     }
@@ -102,9 +102,39 @@ app.get('/projects/:slug/:variant', async (c) => {
         versions: versions.map((v) => ({
             version: v.version,
             created_at: v.created_at,
-            manifest_url: `${R2_PUBLIC_URL}/firmware/${slug}/${variant}/${v.version}/manifest.json`,
         })),
     })
+})
+
+app.get('/projects/:project/:variant/:version', async (c) => {
+    const { project, variant, version } = c.req.param()
+
+    if (!isSafeIdentifier(project)) return jsonError(c, 400, 'Invalid project')
+    if (!isSafeIdentifier(variant)) return jsonError(c, 400, 'Invalid variant')
+    if (!isSafeIdentifier(version, { maxLen: 32 })) return jsonError(c, 400, 'Invalid version')
+
+    const manifest = await getManifest(c.env.FIRMWARE, project, variant, version)
+    if (!manifest) {
+        return jsonError(c, 404, 'Manifest not found')
+    }
+
+    // Transform relative paths to absolute URLs
+    const baseUrl = `${R2_PUBLIC_URL}/firmware/${project}/${variant}/${version}/`
+    if (manifest.builds && Array.isArray(manifest.builds)) {
+        for (const build of manifest.builds) {
+            if (build.parts && Array.isArray(build.parts)) {
+                for (const part of build.parts) {
+                    if (part.path && !part.path.startsWith('http')) {
+                        part.path = baseUrl + part.path
+                    }
+                }
+            }
+        }
+    }
+
+    // Immutable cache headers (manifest content never changes for a given version)
+    c.header('Cache-Control', 'public, max-age=31536000, immutable')
+    return c.json(manifest)
 })
 
 // MARK: - OTA Update Check
@@ -230,20 +260,6 @@ app.get('/tz', async (c) => {
     return c.json({
         tzname: json.location?.timezone ?? 'UTC',
     })
-})
-
-// MARK: - R2 Firmware Storage (redirect to public bucket)
-
-app.get('/firmware/:project/:variant/:version/:filename', (c) => {
-    const { project, variant, version, filename } = c.req.param()
-
-    if (!isSafeIdentifier(project)) return jsonError(c, 400, 'Invalid project')
-    if (!isSafeIdentifier(variant)) return jsonError(c, 400, 'Invalid variant')
-    if (!isSafeIdentifier(version, { maxLen: 32 })) return jsonError(c, 400, 'Invalid version')
-    if (!isSafeIdentifier(filename, { maxLen: 128 })) return jsonError(c, 400, 'Invalid filename')
-
-    const url = `${R2_PUBLIC_URL}/firmware/${project}/${variant}/${version}/${filename}`
-    return c.redirect(url, 302)
 })
 
 // MARK: - GitHub Webhook

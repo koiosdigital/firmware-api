@@ -42,13 +42,13 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
                     },
                 },
             },
-            '/projects/{slug}': {
+            '/projects/{project}': {
                 get: {
                     summary: 'Get project details with variants',
                     tags: ['Projects'],
                     description: 'Returns project info with all variants and their latest versions.',
                     parameters: [
-                        { name: 'slug', in: 'path', required: true, schema: { type: 'string' }, description: 'Project slug (e.g., "matrx-fw")' },
+                        { name: 'project', in: 'path', required: true, schema: { type: 'string' }, description: 'Project slug (e.g., "matrx-fw")' },
                     ],
                     responses: {
                         '200': {
@@ -63,13 +63,13 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
                     },
                 },
             },
-            '/projects/{slug}/{variant}': {
+            '/projects/{project}/{variant}': {
                 get: {
                     summary: 'Get variant details with all versions',
                     tags: ['Projects'],
                     description: 'Returns variant info with all available versions sorted by semver.',
                     parameters: [
-                        { name: 'slug', in: 'path', required: true, schema: { type: 'string' }, description: 'Project slug' },
+                        { name: 'project', in: 'path', required: true, schema: { type: 'string' }, description: 'Project slug' },
                         { name: 'variant', in: 'path', required: true, schema: { type: 'string' }, description: 'Variant name (e.g., "MATRX_MINI")' },
                     ],
                     responses: {
@@ -82,6 +82,33 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
                             },
                         },
                         '404': { description: 'Project or variant not found' },
+                    },
+                },
+            },
+            '/projects/{project}/{variant}/{version}': {
+                get: {
+                    summary: 'Get firmware manifest with absolute URLs',
+                    tags: ['Projects'],
+                    description: 'Returns the firmware manifest with relative paths transformed to absolute R2 URLs. Response is cached immutably.',
+                    parameters: [
+                        { name: 'project', in: 'path', required: true, schema: { type: 'string' }, description: 'Project slug' },
+                        { name: 'variant', in: 'path', required: true, schema: { type: 'string' }, description: 'Variant name' },
+                        { name: 'version', in: 'path', required: true, schema: { type: 'string' }, description: 'Version string' },
+                    ],
+                    responses: {
+                        '200': {
+                            description: 'Manifest with absolute URLs',
+                            headers: {
+                                'Cache-Control': { schema: { type: 'string' }, description: 'public, max-age=31536000, immutable' },
+                            },
+                            content: {
+                                'application/json': {
+                                    schema: { $ref: '#/components/schemas/FirmwareManifest' },
+                                },
+                            },
+                        },
+                        '400': { description: 'Invalid parameters' },
+                        '404': { description: 'Manifest not found' },
                     },
                 },
             },
@@ -103,28 +130,6 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
                         },
                         '400': { description: 'Missing/invalid headers' },
                         '404': { description: 'Unknown project or no releases found' },
-                    },
-                },
-            },
-            '/firmware/{project}/{variant}/{version}/{filename}': {
-                get: {
-                    summary: 'Redirect to firmware file in R2',
-                    tags: ['Storage'],
-                    description: 'Redirects to the public R2 URL for the requested firmware file.',
-                    parameters: [
-                        { name: 'project', in: 'path', required: true, schema: { type: 'string' } },
-                        { name: 'variant', in: 'path', required: true, schema: { type: 'string' } },
-                        { name: 'version', in: 'path', required: true, schema: { type: 'string' } },
-                        { name: 'filename', in: 'path', required: true, schema: { type: 'string' } },
-                    ],
-                    responses: {
-                        '302': {
-                            description: 'Redirect to R2 public URL',
-                            headers: {
-                                Location: { schema: { type: 'string' }, description: 'R2 public URL' },
-                            },
-                        },
-                        '400': { description: 'Invalid parameters' },
                     },
                 },
             },
@@ -243,11 +248,10 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
                             type: 'array',
                             items: {
                                 type: 'object',
-                                required: ['version', 'created_at', 'manifest_url'],
+                                required: ['version', 'created_at'],
                                 properties: {
                                     version: { type: 'string' },
                                     created_at: { type: 'string', format: 'date-time' },
-                                    manifest_url: { type: 'string', format: 'uri', description: 'Direct URL to manifest.json in R2' },
                                 },
                             },
                         },
@@ -360,12 +364,38 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
                         error: { type: 'string' },
                     },
                 },
+                FirmwareManifest: {
+                    type: 'object',
+                    description: 'ESP Web Tools compatible manifest with absolute URLs',
+                    properties: {
+                        name: { type: 'string', description: 'Firmware name' },
+                        version: { type: 'string', description: 'Firmware version' },
+                        builds: {
+                            type: 'array',
+                            items: {
+                                type: 'object',
+                                properties: {
+                                    chipFamily: { type: 'string', description: 'Target chip (e.g., "ESP32")' },
+                                    parts: {
+                                        type: 'array',
+                                        items: {
+                                            type: 'object',
+                                            properties: {
+                                                path: { type: 'string', format: 'uri', description: 'Absolute URL to binary file' },
+                                                offset: { type: 'integer', description: 'Flash offset in bytes' },
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
             },
         },
         tags: [
             { name: 'OTA', description: 'Over-the-air firmware update endpoints' },
-            { name: 'Projects', description: 'Firmware project and variant discovery' },
-            { name: 'Storage', description: 'R2 firmware file storage' },
+            { name: 'Projects', description: 'Firmware project, variant, and manifest discovery' },
             { name: 'Webhooks', description: 'GitHub webhook integration for auto-sync' },
             { name: 'Diagnostics', description: 'Device diagnostic tools' },
             { name: 'Utilities', description: 'Utility endpoints' },
