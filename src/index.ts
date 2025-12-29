@@ -270,16 +270,7 @@ app.post('/webhook/github', async (c) => {
         return jsonError(c, 401, 'Missing signature')
     }
 
-    let payload: string
-    try {
-        payload = await c.req.text()
-    } catch {
-        return jsonError(c, 400, 'Failed to read request body')
-    }
-
-    if (!payload) {
-        return jsonError(c, 400, 'Empty request body')
-    }
+    const payload = await c.req.text()
 
     const isValid = await verifyGitHubSignature(
         payload,
@@ -294,9 +285,8 @@ app.post('/webhook/github', async (c) => {
     let webhookPayload: GitHubWebhookPayload
     try {
         webhookPayload = JSON.parse(payload) as GitHubWebhookPayload
-    } catch (e) {
-        const msg = e instanceof Error ? e.message : 'Unknown error'
-        return jsonError(c, 400, `Invalid JSON payload: ${msg}`)
+    } catch {
+        return jsonError(c, 400, 'Invalid JSON payload')
     }
 
     // Only process release.published events
