@@ -7,13 +7,14 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
         openapi: '3.1.0',
         info: {
             title: 'Koios Firmware API',
-            version: '1.0.0',
-            description: 'Firmware OTA and helper endpoints for Koios devices.',
+            version: '2.0.0',
+            description: 'Firmware OTA, storage, and diagnostic endpoints for Koios devices.',
         },
         paths: {
             '/swagger.json': {
                 get: {
                     summary: 'OpenAPI document',
+                    tags: ['Documentation'],
                     responses: {
                         '200': { description: 'OpenAPI JSON document' },
                     },
@@ -22,6 +23,7 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
             '/projects': {
                 get: {
                     summary: 'List firmware projects',
+                    tags: ['Projects'],
                     responses: {
                         '200': {
                             description: 'Projects list',
@@ -43,6 +45,7 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
             '/projects/{slug}': {
                 get: {
                     summary: 'Get variants for a project',
+                    tags: ['Projects'],
                     parameters: [
                         { name: 'slug', in: 'path', required: true, schema: { type: 'string' } },
                     ],
@@ -63,6 +66,7 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
             '/projects/{slug}/{variant}': {
                 get: {
                     summary: 'Get manifest for a project variant',
+                    tags: ['Projects'],
                     parameters: [
                         { name: 'slug', in: 'path', required: true, schema: { type: 'string' } },
                         { name: 'variant', in: 'path', required: true, schema: { type: 'string' } },
@@ -80,6 +84,7 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
             '/': {
                 get: {
                     summary: 'OTA update check (header-driven)',
+                    tags: ['OTA'],
                     description:
                         'Requires x-firmware-project and x-firmware-version headers. If project supports variants, also requires x-firmware-variant.',
                     parameters: [
@@ -103,6 +108,7 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
             '/mirror/{encodedURL}': {
                 get: {
                     summary: 'Mirror a GitHub download URL (restricted)',
+                    tags: ['OTA'],
                     parameters: [
                         { name: 'encodedURL', in: 'path', required: true, schema: { type: 'string' } },
                     ],
@@ -113,9 +119,85 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
                     },
                 },
             },
+            '/firmware/{project}/{variant}/{version}/{filename}': {
+                get: {
+                    summary: 'Download firmware from R2 storage',
+                    tags: ['Storage'],
+                    description: 'Serves firmware binaries from Cloudflare R2 storage with immutable caching.',
+                    parameters: [
+                        { name: 'project', in: 'path', required: true, schema: { type: 'string' } },
+                        { name: 'variant', in: 'path', required: true, schema: { type: 'string' } },
+                        { name: 'version', in: 'path', required: true, schema: { type: 'string' } },
+                        { name: 'filename', in: 'path', required: true, schema: { type: 'string' } },
+                    ],
+                    responses: {
+                        '200': {
+                            description: 'Firmware binary',
+                            content: { 'application/octet-stream': {} },
+                        },
+                        '400': { description: 'Invalid parameters' },
+                        '404': { description: 'Firmware not found' },
+                    },
+                },
+            },
+            '/webhook/github': {
+                post: {
+                    summary: 'GitHub release webhook',
+                    tags: ['Webhooks'],
+                    description: 'Receives GitHub release webhook events and syncs firmware to R2 storage. Requires X-Hub-Signature-256 header.',
+                    requestBody: {
+                        required: true,
+                        content: {
+                            'application/json': {
+                                schema: { $ref: '#/components/schemas/GitHubWebhookPayload' },
+                            },
+                        },
+                    },
+                    responses: {
+                        '200': {
+                            description: 'Webhook processed',
+                            content: {
+                                'application/json': {
+                                    schema: { $ref: '#/components/schemas/WebhookResponse' },
+                                },
+                            },
+                        },
+                        '400': { description: 'Invalid payload' },
+                        '401': { description: 'Invalid or missing signature' },
+                    },
+                },
+            },
+            '/coredump': {
+                post: {
+                    summary: 'Analyze ESP-IDF coredump',
+                    tags: ['Diagnostics'],
+                    description: 'Parses ESP-IDF coredump data and extracts crash information. Returns raw addresses for local addr2line decoding.',
+                    requestBody: {
+                        required: true,
+                        content: {
+                            'application/json': {
+                                schema: { $ref: '#/components/schemas/CoredumpRequest' },
+                            },
+                        },
+                    },
+                    responses: {
+                        '200': {
+                            description: 'Coredump analysis result',
+                            content: {
+                                'application/json': {
+                                    schema: { $ref: '#/components/schemas/CoredumpResponse' },
+                                },
+                            },
+                        },
+                        '400': { description: 'Invalid request body' },
+                        '404': { description: 'Project not found' },
+                    },
+                },
+            },
             '/tz': {
                 get: {
                     summary: 'Return client timezone (via IP geolocation)',
+                    tags: ['Utilities'],
                     responses: {
                         '200': {
                             description: 'Timezone response',
@@ -185,7 +267,84 @@ export function buildOpenApiDocument(args: { projects: Project[] }) {
                         tzname: { type: 'string' },
                     },
                 },
+                GitHubWebhookPayload: {
+                    type: 'object',
+                    properties: {
+                        action: { type: 'string' },
+                        release: {
+                            type: 'object',
+                            properties: {
+                                tag_name: { type: 'string' },
+                                assets: {
+                                    type: 'array',
+                                    items: {
+                                        type: 'object',
+                                        properties: {
+                                            name: { type: 'string' },
+                                            browser_download_url: { type: 'string' },
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                        repository: {
+                            type: 'object',
+                            properties: {
+                                full_name: { type: 'string' },
+                            },
+                        },
+                    },
+                },
+                WebhookResponse: {
+                    type: 'object',
+                    properties: {
+                        message: { type: 'string' },
+                        project: { type: 'string' },
+                        version: { type: 'string' },
+                        stored: { type: 'array', items: { type: 'string' } },
+                        errors: { type: 'array', items: { type: 'string' } },
+                    },
+                },
+                CoredumpRequest: {
+                    type: 'object',
+                    required: ['project', 'variant', 'version', 'coredump'],
+                    properties: {
+                        project: { type: 'string', description: 'Project slug (e.g., "MATRX-fw")' },
+                        variant: { type: 'string', description: 'Firmware variant (e.g., "MATRX_MINI")' },
+                        version: { type: 'string', description: 'Firmware version (e.g., "1.2.3")' },
+                        coredump: { type: 'string', description: 'Base64-encoded coredump data' },
+                    },
+                },
+                CoredumpResponse: {
+                    type: 'object',
+                    properties: {
+                        success: { type: 'boolean' },
+                        crash_info: {
+                            type: 'object',
+                            properties: {
+                                exception_cause: { type: 'string' },
+                                pc: { type: 'string' },
+                                registers: {
+                                    type: 'object',
+                                    additionalProperties: { type: 'string' },
+                                },
+                            },
+                        },
+                        backtrace: { type: 'array', items: { type: 'string' } },
+                        elf_download_url: { type: 'string' },
+                        error: { type: 'string' },
+                    },
+                },
             },
         },
+        tags: [
+            { name: 'OTA', description: 'Over-the-air firmware update endpoints' },
+            { name: 'Projects', description: 'Firmware project management' },
+            { name: 'Storage', description: 'R2 firmware storage' },
+            { name: 'Webhooks', description: 'GitHub webhook integration' },
+            { name: 'Diagnostics', description: 'Device diagnostic tools' },
+            { name: 'Utilities', description: 'Utility endpoints' },
+            { name: 'Documentation', description: 'API documentation' },
+        ],
     } as const
 }
