@@ -1,5 +1,5 @@
 import type { FirmwareManifest, GitHubRelease } from './types'
-import { insertRelease } from './db'
+import { insertRelease, getProcessedAssetIds, markAssetProcessed } from './db'
 
 /**
  * Build the R2 key for a firmware file
@@ -67,6 +67,7 @@ export async function getManifest(
 
 /**
  * Download and store release assets from GitHub to R2, and record in D1
+ * Only processes assets that haven't been seen before (by asset ID)
  */
 export async function syncReleaseToR2(
     bucket: R2Bucket,
@@ -74,24 +75,25 @@ export async function syncReleaseToR2(
     projectId: number,
     projectSlug: string,
     release: GitHubRelease
-): Promise<{ stored: string[]; variants: string[]; errors: string[] }> {
+): Promise<{ stored: string[]; skipped: number; variants: string[]; errors: string[] }> {
     const version = release.tag_name.replace(/^v/i, '')
     const stored: string[] = []
     const variantsSet = new Set<string>()
     const errors: string[] = []
 
-    for (const asset of release.assets) {
-        // Skip non-firmware files
-        if (!isFirmwareAsset(asset.name)) {
-            continue
-        }
+    // Filter to firmware assets only
+    const firmwareAssets = release.assets.filter(
+        (asset) => isFirmwareAsset(asset.name) && parseVariantFromAsset(asset.name)
+    )
 
-        // Parse variant from manifest filename
-        const variant = parseVariantFromAsset(asset.name)
-        if (!variant) {
-            continue
-        }
+    // Check which assets we've already processed
+    const assetIds = firmwareAssets.map((a) => a.id)
+    const processedIds = await getProcessedAssetIds(db, assetIds)
+    const newAssets = firmwareAssets.filter((a) => !processedIds.has(a.id))
+    const skipped = firmwareAssets.length - newAssets.length
 
+    for (const asset of newAssets) {
+        const variant = parseVariantFromAsset(asset.name)!
         variantsSet.add(variant)
 
         try {
@@ -117,6 +119,9 @@ export async function syncReleaseToR2(
                 asset.content_type
             )
             stored.push(asset.name)
+
+            // Mark asset as processed
+            await markAssetProcessed(db, asset.id, projectId)
         } catch (error) {
             const message = error instanceof Error ? error.message : 'Unknown error'
             errors.push(`Error storing ${asset.name}: ${message}`)
@@ -134,7 +139,7 @@ export async function syncReleaseToR2(
         }
     }
 
-    return { stored, variants, errors }
+    return { stored, skipped, variants, errors }
 }
 
 /**

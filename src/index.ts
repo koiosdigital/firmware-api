@@ -289,8 +289,9 @@ app.post('/webhook/github', async (c) => {
         return jsonError(c, 400, 'Invalid JSON payload')
     }
 
-    // Only process release.published events
-    if (webhookPayload.action !== 'published' || !webhookPayload.release) {
+    // Only process release.published and release.edited events
+    const validActions = ['published', 'edited']
+    if (!validActions.includes(webhookPayload.action) || !webhookPayload.release) {
         return c.json({ message: 'Event ignored' }, 200)
     }
 
@@ -322,6 +323,7 @@ app.post('/webhook/github', async (c) => {
         project: project.slug,
         version: webhookPayload.release.tag_name,
         stored: result.stored,
+        skipped: result.skipped,
         errors: result.errors,
     })
 })

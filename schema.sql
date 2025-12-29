@@ -25,3 +25,13 @@ CREATE TABLE IF NOT EXISTS releases (
 
 -- Index for fast latest version lookup (sorted by semver components)
 CREATE INDEX IF NOT EXISTS idx_releases_latest ON releases(project_id, variant, major DESC, minor DESC, patch DESC);
+
+-- Processed assets table: tracks GitHub asset IDs we've already synced
+CREATE TABLE IF NOT EXISTS processed_assets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id INTEGER NOT NULL UNIQUE,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_processed_assets_asset_id ON processed_assets(asset_id);

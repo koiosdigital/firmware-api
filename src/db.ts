@@ -186,3 +186,37 @@ export async function getVersions(
 
     return result.results
 }
+
+// MARK: - Processed Assets
+
+/**
+ * Check which asset IDs have already been processed
+ */
+export async function getProcessedAssetIds(
+    db: D1Database,
+    assetIds: number[]
+): Promise<Set<number>> {
+    if (assetIds.length === 0) return new Set()
+
+    const placeholders = assetIds.map(() => '?').join(',')
+    const result = await db.prepare(`
+        SELECT asset_id FROM processed_assets WHERE asset_id IN (${placeholders})
+    `).bind(...assetIds).all<{ asset_id: number }>()
+
+    return new Set(result.results.map((r) => r.asset_id))
+}
+
+/**
+ * Mark an asset ID as processed
+ */
+export async function markAssetProcessed(
+    db: D1Database,
+    assetId: number,
+    projectId: number
+): Promise<void> {
+    await db.prepare(`
+        INSERT INTO processed_assets (asset_id, project_id)
+        VALUES (?, ?)
+        ON CONFLICT(asset_id) DO NOTHING
+    `).bind(assetId, projectId).run()
+}

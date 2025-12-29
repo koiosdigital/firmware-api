@@ -17,6 +17,7 @@ export interface Project {
 
 // GitHub API types
 export interface GitHubReleaseAsset {
+    id: number
     name: string
     browser_download_url: string
     size: number
