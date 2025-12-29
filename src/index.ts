@@ -15,7 +15,7 @@ import {
     parseSemver,
 } from './utils'
 import { verifyGitHubSignature } from './crypto'
-import { getFirmware, getManifest, syncReleaseToR2 } from './storage'
+import { getManifest, syncReleaseToR2 } from './storage'
 import { parseCoredump } from './coredump'
 import {
     getAllProjects,
@@ -240,9 +240,9 @@ app.get('/tz', async (c) => {
     })
 })
 
-// MARK: - R2 Firmware Storage
+// MARK: - R2 Firmware Storage (redirect to public bucket)
 
-app.get('/firmware/:project/:variant/:version/:filename', async (c) => {
+app.get('/firmware/:project/:variant/:version/:filename', (c) => {
     const { project, variant, version, filename } = c.req.param()
 
     if (!isSafeIdentifier(project)) return jsonError(c, 400, 'Invalid project')
@@ -250,18 +250,8 @@ app.get('/firmware/:project/:variant/:version/:filename', async (c) => {
     if (!isSafeIdentifier(version, { maxLen: 32 })) return jsonError(c, 400, 'Invalid version')
     if (!isSafeIdentifier(filename, { maxLen: 128 })) return jsonError(c, 400, 'Invalid filename')
 
-    const object = await getFirmware(c.env.FIRMWARE, project, variant, version, filename)
-    if (!object) {
-        return jsonError(c, 404, 'Firmware not found')
-    }
-
-    const headers = new Headers()
-    headers.set('Content-Type', object.httpMetadata?.contentType ?? 'application/octet-stream')
-    headers.set('Content-Length', object.size.toString())
-    headers.set('Cache-Control', 'public, max-age=31536000, immutable')
-    headers.set('ETag', object.httpEtag)
-
-    return new Response(object.body, { headers })
+    const url = `${R2_PUBLIC_URL}/firmware/${project}/${variant}/${version}/${filename}`
+    return c.redirect(url, 302)
 })
 
 // MARK: - GitHub Webhook
