@@ -264,15 +264,3 @@ function isValidCodeAddress(addr: number): boolean {
     )
 }
 
-/**
- * Build the ELF download URL for local decoding
- */
-export function buildElfDownloadUrl(
-    repoSlug: string,
-    version: string,
-    variant: string
-): string {
-    // Assuming ELF files are named like: {variant}_debug.elf
-    const tag = version.startsWith('v') ? version : `v${version}`
-    return `https://github.com/${repoSlug}/releases/download/${tag}/${variant}.elf`
-}

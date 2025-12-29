@@ -1,12 +1,9 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
-import { projects } from './projects'
 import type {
     CoredumpRequest,
     Env,
-    FirmwareManifest,
     FirmwareUpdateResponse,
-    GitHubRelease,
     GitHubWebhookPayload,
 } from './types'
 import { buildOpenApiDocument } from './openapi'
@@ -16,13 +13,19 @@ import {
     isValidIpAddress,
     jsonError,
     parseSemver,
-    safeDecodeURIComponent,
-    sanitizeFilename,
 } from './utils'
-import { getCachedRelease, invalidateCache, setCachedRelease } from './cache'
 import { verifyGitHubSignature } from './crypto'
-import { getFirmware, syncReleaseToR2 } from './storage'
-import { buildElfDownloadUrl, parseCoredump } from './coredump'
+import { getFirmware, getManifest, syncReleaseToR2 } from './storage'
+import { parseCoredump } from './coredump'
+import {
+    getAllProjects,
+    getProjectBySlug,
+    upsertProject,
+    getVariants,
+    getLatestVersion,
+} from './db'
+
+const R2_PUBLIC_URL = 'https://otafiles.koiosdigital.net'
 
 const app = new Hono<{ Bindings: Env }>()
 
@@ -34,67 +37,15 @@ app.onError((err, c) => {
 
 app.notFound((c) => jsonError(c, 404, 'Not found'))
 
-function githubHeaders(): Record<string, string> {
-    return {
-        Accept: 'application/vnd.github+json',
-        'X-GitHub-Api-Version': '2022-11-28',
-        'User-Agent': 'Koios OTA Updater',
-    }
-}
-
-type FetchReleaseSuccess = { ok: true; release: GitHubRelease }
-type FetchReleaseError = { ok: false; status: number; statusText: string }
-type FetchReleaseResult = FetchReleaseSuccess | FetchReleaseError
-
-async function fetchLatestRelease(
-    repoSlug: string,
-    cache?: KVNamespace
-): Promise<FetchReleaseResult> {
-    // Try cache first
-    if (cache) {
-        const cached = await getCachedRelease(cache, repoSlug)
-        if (cached) {
-            return { ok: true, release: cached }
-        }
-    }
-
-    const res = await fetch(`https://api.github.com/repos/${repoSlug}/releases/latest`, {
-        headers: githubHeaders(),
-    })
-
-    if (!res.ok) {
-        return { ok: false, status: res.status, statusText: res.statusText }
-    }
-
-    let json: unknown
-    try {
-        json = await res.json()
-    } catch {
-        return { ok: false, status: 502, statusText: 'Invalid JSON from GitHub' }
-    }
-
-    const release = json as Partial<GitHubRelease>
-    if (!release.tag_name || !Array.isArray(release.assets)) {
-        return { ok: false, status: 502, statusText: 'Unexpected GitHub API response' }
-    }
-
-    const validatedRelease = release as GitHubRelease
-
-    // Store in cache
-    if (cache) {
-        await setCachedRelease(cache, repoSlug, validatedRelease)
-    }
-
-    return { ok: true, release: validatedRelease }
-}
-
 // MARK: - Projects
 
-app.get('/projects', (c) => {
+app.get('/projects', async (c) => {
+    const projects = await getAllProjects(c.env.DB)
     return c.json(projects)
 })
 
-app.get('/swagger.json', (c) => {
+app.get('/swagger.json', async (c) => {
+    const projects = await getAllProjects(c.env.DB)
     return c.json(buildOpenApiDocument({ projects }), 200)
 })
 
@@ -103,18 +54,12 @@ app.get('/projects/:slug', async (c) => {
     if (!isSafeIdentifier(slug)) {
         return jsonError(c, 400, 'Invalid project slug')
     }
-    const project = projects.find((p) => p.slug === slug)
+    const project = await getProjectBySlug(c.env.DB, slug)
     if (!project) {
         return jsonError(c, 404, `Project ${slug} not found`)
     }
 
-    const upstream = await fetchLatestRelease(project.repository_slug, c.env.CACHE)
-    if (!upstream.ok) {
-        return jsonError(c, 502, `Error fetching data from GitHub: ${upstream.statusText}`)
-    }
-
-    const manifestAssets = upstream.release.assets.filter((a) => a.name.endsWith('_manifest.json'))
-    const variants = manifestAssets.map((a) => a.name.replace('_manifest.json', ''))
+    const variants = await getVariants(c.env.DB, slug)
 
     return c.json({
         name: project.name,
@@ -132,67 +77,54 @@ app.get('/projects/:slug/:variant', async (c) => {
     if (!isSafeIdentifier(variant)) {
         return jsonError(c, 400, 'Invalid variant')
     }
-    const project = projects.find((p) => p.slug === slug)
+    const project = await getProjectBySlug(c.env.DB, slug)
     if (!project) {
         return jsonError(c, 404, `Project ${slug} not found`)
     }
 
-    const upstream = await fetchLatestRelease(project.repository_slug, c.env.CACHE)
-    if (!upstream.ok) {
-        return jsonError(c, 502, `Error fetching data from GitHub: ${upstream.statusText}`)
+    const latestVersion = await getLatestVersion(c.env.DB, slug, variant)
+    if (!latestVersion) {
+        return jsonError(c, 404, `No releases found for variant ${variant}`)
     }
 
-    const manifestName = `${variant}_manifest.json`
-    const manifestAsset = upstream.release.assets.find((a) => a.name === manifestName)
-
-    if (!manifestAsset) {
-        return jsonError(c, 404, `Variant ${variant} not found for project ${slug}`)
+    const manifest = await getManifest(c.env.FIRMWARE, slug, variant, latestVersion)
+    if (!manifest) {
+        return jsonError(c, 404, `Manifest not found for ${variant}`)
     }
 
-    try {
-        const manifestResponse = await fetch(manifestAsset.browser_download_url)
-        if (!manifestResponse.ok) {
-            return jsonError(c, 500, `Failed to fetch manifest for ${variant}: ${manifestResponse.statusText}`)
-        }
-
-        const manifest = (await manifestResponse.json()) as FirmwareManifest
-        const baseUrl = manifestAsset.browser_download_url.replace(manifestAsset.name, '')
-
-        // Rewrite URLs to absolute
-        if (manifest.builds && Array.isArray(manifest.builds)) {
-            manifest.builds = manifest.builds.map((build) => {
-                if (!build || typeof build !== 'object') return build
-                if (!Array.isArray(build.parts)) return build
-                return {
-                    ...build,
-                    parts: build.parts.map((part) => {
-                        if (!part || typeof part !== 'object') return part
-                        const path = typeof part.path === 'string' ? part.path : undefined
-                        return {
-                            ...part,
-                            path: path ? baseUrl + path : path,
-                        }
-                    }),
-                }
-            })
-        }
-
-        return c.json(manifest)
-    } catch {
-        return jsonError(c, 500, `Error processing manifest for ${variant}`)
+    // Rewrite URLs to absolute R2 public URLs
+    if (manifest.builds && Array.isArray(manifest.builds)) {
+        const baseUrl = `${R2_PUBLIC_URL}/firmware/${slug}/${variant}/${latestVersion}/`
+        manifest.builds = manifest.builds.map((build) => {
+            if (!build || typeof build !== 'object') return build
+            if (!Array.isArray(build.parts)) return build
+            return {
+                ...build,
+                parts: build.parts.map((part) => {
+                    if (!part || typeof part !== 'object') return part
+                    const path = typeof part.path === 'string' ? part.path : undefined
+                    return {
+                        ...part,
+                        path: path ? baseUrl + path : path,
+                    }
+                }),
+            }
+        })
     }
+
+    return c.json(manifest)
 })
 
 // MARK: - OTA Update Check
 
 app.get('/', async (c) => {
-    const project = c.req.header('x-firmware-project')
+    const projectSlug = c.req.header('x-firmware-project')
     const currentVersion = c.req.header('x-firmware-version')
     const projectVariant = c.req.header('x-firmware-variant')
 
-    if (!project) return jsonError(c, 400, 'Missing x-firmware-project header')
+    if (!projectSlug) return jsonError(c, 400, 'Missing x-firmware-project header')
     if (!currentVersion) return jsonError(c, 400, 'Missing x-firmware-version header')
-    if (!isSafeIdentifier(project)) return jsonError(c, 400, 'Invalid x-firmware-project')
+    if (!isSafeIdentifier(projectSlug)) return jsonError(c, 400, 'Invalid x-firmware-project')
 
     // Compatibility: devices reporting 0.0.1 are considered up-to-date
     if (currentVersion.trim() === '0.0.1') {
@@ -200,14 +132,12 @@ app.get('/', async (c) => {
         return c.json(response)
     }
 
-    const projectData = projects.find((p) => p.slug === project)
-    if (!projectData) {
-        return jsonError(c, 404, `Project ${project} not found`)
+    const project = await getProjectBySlug(c.env.DB, projectSlug)
+    if (!project) {
+        return jsonError(c, 404, `Project ${projectSlug} not found`)
     }
 
-    if (projectData.supports_variants && !projectVariant) {
-        return jsonError(c, 400, 'Missing x-firmware-variant header')
-    }
+    // Variant is required if provided, but we don't enforce it based on project config anymore
     if (projectVariant && !isSafeIdentifier(projectVariant)) {
         return jsonError(c, 400, 'Invalid x-firmware-variant')
     }
@@ -215,13 +145,27 @@ app.get('/', async (c) => {
     const current = parseSemver(currentVersion)
     if (!current) return jsonError(c, 400, 'Invalid x-firmware-version (expected semver)')
 
-    const upstream = await fetchLatestRelease(projectData.repository_slug, c.env.CACHE)
-    if (!upstream.ok) {
-        return jsonError(c, 502, `Error fetching data from GitHub: ${upstream.statusText}`)
+    const variant = projectVariant ?? 'default'
+    const latestVersion = await getLatestVersion(c.env.DB, projectSlug, variant)
+
+    if (!latestVersion) {
+        const response: FirmwareUpdateResponse = {
+            error: true,
+            update_available: false,
+            error_message: `No releases found for ${projectSlug}/${variant}`,
+        }
+        return c.json(response, 404)
     }
 
-    const latest = parseSemver(upstream.release.tag_name)
-    if (!latest) return jsonError(c, 502, 'Invalid tag_name from GitHub')
+    const latest = parseSemver(latestVersion)
+    if (!latest) {
+        const response: FirmwareUpdateResponse = {
+            error: true,
+            update_available: false,
+            error_message: 'Invalid version in storage',
+        }
+        return c.json(response, 500)
+    }
 
     const hasUpdate = compareSemver(current, latest) < 0
 
@@ -230,120 +174,50 @@ app.get('/', async (c) => {
         return c.json(response)
     }
 
-    const manifestName = projectData.supports_variants
-        ? `${projectVariant}_manifest.json`
-        : 'default_manifest.json'
-
-    const manifestAsset = upstream.release.assets.find((a) => a.name === manifestName)
-    if (!manifestAsset) {
+    const manifest = await getManifest(c.env.FIRMWARE, projectSlug, variant, latestVersion)
+    if (!manifest) {
         const response: FirmwareUpdateResponse = {
             error: true,
             update_available: false,
-            error_message: `No manifest found for ${manifestName} in release ${upstream.release.tag_name}`,
+            error_message: `No manifest found for ${projectSlug}/${variant}/${latestVersion}`,
         }
         return c.json(response, 502)
     }
 
-    try {
-        const manifestResponse = await fetch(manifestAsset.browser_download_url)
-        if (!manifestResponse.ok) {
-            const response: FirmwareUpdateResponse = {
-                error: true,
-                update_available: false,
-                error_message: `Failed to fetch manifest: ${manifestResponse.statusText}`,
-            }
-            return c.json(response, 502)
-        }
+    let appBinaryUrl: string | null = null
+    const baseUrl = `${R2_PUBLIC_URL}/firmware/${projectSlug}/${variant}/${latestVersion}/`
 
-        const manifest = (await manifestResponse.json()) as FirmwareManifest
-        const baseUrl = manifestAsset.browser_download_url.replace(manifestAsset.name, '')
-        let appBinaryUrl: string | null = null
+    if (manifest.builds && Array.isArray(manifest.builds) && manifest.builds.length > 0) {
+        const build = manifest.builds[0]
+        if (build?.parts && Array.isArray(build.parts)) {
+            const normalizedSlug = projectSlug.toLowerCase().replace(/-/g, '_')
+            const appPart = build.parts.find((part) => {
+                if (!part?.path) return false
+                const normalizedPath = part.path.toLowerCase().replace(/-/g, '_')
+                return normalizedPath.includes(normalizedSlug)
+            })
 
-        if (manifest.builds && Array.isArray(manifest.builds) && manifest.builds.length > 0) {
-            const build = manifest.builds[0]
-            if (build?.parts && Array.isArray(build.parts)) {
-                const normalizedSlug = projectData.slug.toLowerCase().replace(/-/g, '_')
-                const appPart = build.parts.find((part) => {
-                    if (!part?.path) return false
-                    const normalizedPath = part.path.toLowerCase().replace(/-/g, '_')
-                    return normalizedPath.includes(normalizedSlug)
-                })
-
-                if (appPart?.path) {
-                    appBinaryUrl = baseUrl + appPart.path
-                }
+            if (appPart?.path) {
+                appBinaryUrl = baseUrl + appPart.path
             }
         }
+    }
 
-        if (!appBinaryUrl) {
-            const response: FirmwareUpdateResponse = {
-                error: true,
-                update_available: false,
-                error_message: `No app binary found in manifest for ${manifestName}`,
-            }
-            return c.json(response, 502)
-        }
-
-        const response: FirmwareUpdateResponse = {
-            error: false,
-            update_available: true,
-            ota_url: appBinaryUrl,
-        }
-        return c.json(response)
-    } catch {
+    if (!appBinaryUrl) {
         const response: FirmwareUpdateResponse = {
             error: true,
             update_available: false,
-            error_message: 'Error processing manifest',
+            error_message: `No app binary found in manifest for ${variant}`,
         }
-        return c.json(response, 500)
-    }
-})
-
-// MARK: - GitHub Mirror
-
-app.get('/mirror/:encodedURL', async (c) => {
-    const encodedURL = c.req.param('encodedURL')
-    const decoded = safeDecodeURIComponent(encodedURL)
-    if (!decoded.ok) return jsonError(c, 400, 'Invalid encodedURL')
-
-    let url: URL
-    try {
-        url = new URL(decoded.value)
-    } catch {
-        return jsonError(c, 400, 'Invalid URL')
+        return c.json(response, 502)
     }
 
-    if (url.protocol !== 'https:') return jsonError(c, 400, 'Only https URLs are allowed')
-    if (url.username || url.password) return jsonError(c, 400, 'Credentials in URL are not allowed')
-
-    const allowedHosts = new Set([
-        'github.com',
-        'objects.githubusercontent.com',
-        'release-assets.githubusercontent.com',
-        'github-releases.githubusercontent.com',
-        'raw.githubusercontent.com',
-    ])
-    if (!allowedHosts.has(url.hostname)) return jsonError(c, 403, 'Host not allowed')
-
-    const data = await fetch(url.toString(), {
-        headers: { 'User-Agent': 'Koios OTA Updater' },
-    })
-    if (!data.ok) {
-        return jsonError(c, 502, `Error fetching data from URL: ${data.statusText}`)
+    const response: FirmwareUpdateResponse = {
+        error: false,
+        update_available: true,
+        ota_url: appBinaryUrl,
     }
-
-    const buffer = await data.arrayBuffer()
-
-    return new Response(buffer, {
-        status: 200,
-        headers: {
-            'Content-Type': 'application/octet-stream',
-            'Content-Disposition': `attachment; filename="${sanitizeFilename(url.pathname)}"`,
-            'Content-Length': buffer.byteLength.toString(),
-            'Cache-Control': 'no-store',
-        },
-    })
+    return c.json(response)
 })
 
 // MARK: - Timezone
@@ -427,18 +301,20 @@ app.post('/webhook/github', async (c) => {
         return jsonError(c, 400, 'Missing repository name')
     }
 
-    // Find the project by repository
-    const project = projects.find((p) => p.repository_slug === repoFullName)
-    if (!project) {
-        return c.json({ message: 'Repository not configured' }, 200)
-    }
+    // Derive project name from release name or repository name
+    // e.g., "koiosdigital/matrx-fw" -> "MATRX" (from release name) or "matrx-fw" (fallback)
+    const releaseName = webhookPayload.release.name
+    const repoName = repoFullName.split('/').pop() ?? repoFullName
+    const projectName = releaseName || repoName.replace(/-fw$/, '').toUpperCase()
 
-    // Invalidate cache for this repository
-    await invalidateCache(c.env.CACHE, project.repository_slug)
+    // Upsert the project (create if new, update timestamp if exists)
+    const project = await upsertProject(c.env.DB, repoFullName, projectName)
 
-    // Sync release assets to R2
+    // Sync release assets to R2 and record in D1
     const result = await syncReleaseToR2(
         c.env.FIRMWARE,
+        c.env.DB,
+        project.id,
         project.slug,
         webhookPayload.release
     )
@@ -477,20 +353,16 @@ app.post('/coredump', async (c) => {
         return jsonError(c, 400, 'Missing coredump data')
     }
 
-    const projectData = projects.find((p) => p.slug === project)
+    const projectData = await getProjectBySlug(c.env.DB, project)
     if (!projectData) {
         return jsonError(c, 404, `Project ${project} not found`)
     }
 
     const result = parseCoredump(coredump)
 
-    // Add ELF download URL for local decoding
+    // Add ELF download URL for local decoding (from R2)
     if (result.success) {
-        result.elf_download_url = buildElfDownloadUrl(
-            projectData.repository_slug,
-            version,
-            variant
-        )
+        result.elf_download_url = `${R2_PUBLIC_URL}/firmware/${project}/${variant}/${version}/${variant}.elf`
     }
 
     return c.json(result)

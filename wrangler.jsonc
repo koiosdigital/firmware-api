@@ -5,16 +5,17 @@
   "compatibility_date": "2025-04-17",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
-  "kv_namespaces": [
-    {
-      "binding": "CACHE",
-      "id": "a2bfa2e56e994c2a8eb12cb2844d7ca1"
-    }
-  ],
   "r2_buckets": [
     {
       "binding": "FIRMWARE",
       "bucket_name": "kd-firmware"
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "kd-firmware-api",
+      "database_id": "9d441285-2a1b-4217-9cb7-670cc47acf01"
     }
   ]
 }

@@ -1,16 +1,18 @@
 // Cloudflare Worker bindings
 export interface Env {
-    CACHE: KVNamespace
     FIRMWARE: R2Bucket
+    DB: D1Database
     GITHUB_WEBHOOK_SECRET: string
 }
 
-// Project configuration
+// Project configuration (from D1 database)
 export interface Project {
+    id: number
     slug: string
-    supports_variants: boolean
     repository_slug: string
     name: string
+    created_at: string
+    updated_at: string
 }
 
 // GitHub API types
@@ -23,6 +25,7 @@ export interface GitHubReleaseAsset {
 
 export interface GitHubRelease {
     tag_name: string
+    name?: string
     assets: GitHubReleaseAsset[]
     html_url: string
     published_at: string
@@ -98,8 +101,3 @@ export interface CoredumpResponse {
     error?: string
 }
 
-// Cache types
-export interface CachedRelease {
-    release: GitHubRelease
-    cached_at: number
-}

@@ -14,20 +14,6 @@ export function isSafeIdentifier(value: string, opts?: { maxLen?: number }) {
     return /^[A-Za-z0-9_.-]+$/.test(value)
 }
 
-export function safeDecodeURIComponent(value: string) {
-    try {
-        return { ok: true as const, value: decodeURIComponent(value) }
-    } catch {
-        return { ok: false as const, value: '' }
-    }
-}
-
-export function sanitizeFilename(input: string) {
-    const base = input.trim().split(/[\\/]/).pop() ?? 'download.bin'
-    const cleaned = base.replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 128)
-    return cleaned.length ? cleaned : 'download.bin'
-}
-
 export function parseSemver(input: string) {
     // Accept "v1.2.3" or "1.2.3". Ignore any prerelease/build metadata.
     const normalized = input.trim().replace(/^v/i, '').split(/[+-]/)[0]

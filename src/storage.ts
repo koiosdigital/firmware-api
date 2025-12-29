@@ -1,4 +1,5 @@
 import type { FirmwareManifest, GitHubRelease } from './types'
+import { insertRelease } from './db'
 
 /**
  * Build the R2 key for a firmware file
@@ -11,21 +12,6 @@ export function buildFirmwareKey(
     filename: string
 ): string {
     return `firmware/${project}/${variant}/${version}/${filename}`
-}
-
-/**
- * Check if a firmware file exists in R2
- */
-export async function firmwareExists(
-    bucket: R2Bucket,
-    project: string,
-    variant: string,
-    version: string,
-    filename: string
-): Promise<boolean> {
-    const key = buildFirmwareKey(project, variant, version, filename)
-    const head = await bucket.head(key)
-    return head !== null
 }
 
 /**
@@ -63,24 +49,6 @@ export async function storeFirmware(
 }
 
 /**
- * Store manifest JSON in R2
- */
-export async function storeManifest(
-    bucket: R2Bucket,
-    project: string,
-    variant: string,
-    version: string,
-    manifest: FirmwareManifest
-): Promise<R2Object> {
-    const key = buildFirmwareKey(project, variant, version, 'manifest.json')
-    return bucket.put(key, JSON.stringify(manifest), {
-        httpMetadata: {
-            contentType: 'application/json',
-        },
-    })
-}
-
-/**
  * Get manifest from R2
  */
 export async function getManifest(
@@ -98,38 +66,18 @@ export async function getManifest(
 }
 
 /**
- * List all versions of a firmware in R2
- */
-export async function listVersions(
-    bucket: R2Bucket,
-    project: string,
-    variant: string
-): Promise<string[]> {
-    const prefix = `firmware/${project}/${variant}/`
-    const listed = await bucket.list({ prefix, delimiter: '/' })
-
-    const versions: string[] = []
-    for (const prefix of listed.delimitedPrefixes) {
-        // Extract version from prefix like "firmware/project/variant/1.0.0/"
-        const parts = prefix.split('/')
-        const version = parts[parts.length - 2]
-        if (version) {
-            versions.push(version)
-        }
-    }
-    return versions
-}
-
-/**
- * Download and store release assets from GitHub to R2
+ * Download and store release assets from GitHub to R2, and record in D1
  */
 export async function syncReleaseToR2(
     bucket: R2Bucket,
-    project: string,
+    db: D1Database,
+    projectId: number,
+    projectSlug: string,
     release: GitHubRelease
-): Promise<{ stored: string[]; errors: string[] }> {
+): Promise<{ stored: string[]; variants: string[]; errors: string[] }> {
     const version = release.tag_name.replace(/^v/i, '')
     const stored: string[] = []
+    const variantsSet = new Set<string>()
     const errors: string[] = []
 
     for (const asset of release.assets) {
@@ -143,6 +91,8 @@ export async function syncReleaseToR2(
         if (!variant) {
             continue
         }
+
+        variantsSet.add(variant)
 
         try {
             const response = await fetch(asset.browser_download_url, {
@@ -159,7 +109,7 @@ export async function syncReleaseToR2(
             const data = await response.arrayBuffer()
             await storeFirmware(
                 bucket,
-                project,
+                projectSlug,
                 variant,
                 version,
                 asset.name,
@@ -173,7 +123,18 @@ export async function syncReleaseToR2(
         }
     }
 
-    return { stored, errors }
+    // Record each variant in D1
+    const variants = Array.from(variantsSet)
+    for (const variant of variants) {
+        try {
+            await insertRelease(db, projectId, variant, version)
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Unknown error'
+            errors.push(`Error recording release ${variant}@${version}: ${message}`)
+        }
+    }
+
+    return { stored, variants, errors }
 }
 
 /**
