@@ -21,7 +21,7 @@
   "queues": {
     "producers": [
       {
-        "binding": "kd_firmware_releases",
+        "binding": "RELEASE_QUEUE",
         "queue": "kd-firmware-releases"
       }
     ],
