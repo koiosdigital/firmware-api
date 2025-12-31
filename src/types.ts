@@ -2,7 +2,19 @@
 export interface Env {
     FIRMWARE: R2Bucket
     DB: D1Database
+    RELEASE_QUEUE: Queue<ReleaseQueueMessage>
     GITHUB_WEBHOOK_SECRET: string
+}
+
+// Queue message for processing release manifests
+export interface ReleaseQueueMessage {
+    projectId: number
+    projectSlug: string
+    version: string
+    manifestAssetId: number
+    manifestUrl: string
+    manifestFilename: string
+    assets: { name: string; url: string; contentType: string }[]
 }
 
 // Project configuration (from D1 database)

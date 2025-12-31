@@ -17,5 +17,20 @@
       "database_name": "kd-firmware-api",
       "database_id": "9d441285-2a1b-4217-9cb7-670cc47acf01"
     }
-  ]
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "kd_firmware_releases",
+        "queue": "kd-firmware-releases"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "kd-firmware-releases",
+        "max_batch_size": 1,
+        "max_retries": 3
+      }
+    ]
+  }
 }

@@ -5,6 +5,7 @@ import type {
     Env,
     FirmwareUpdateResponse,
     GitHubWebhookPayload,
+    ReleaseQueueMessage,
 } from './types'
 import { buildOpenApiDocument } from './openapi'
 import {
@@ -15,7 +16,7 @@ import {
     parseSemver,
 } from './utils'
 import { verifyGitHubSignature } from './crypto'
-import { getManifest, syncReleaseToR2 } from './storage'
+import { getManifest, processManifest } from './storage'
 import { parseCoredump } from './coredump'
 import {
     getAllProjects,
@@ -309,22 +310,39 @@ app.post('/webhook/github', async (c) => {
     // Upsert the project (create if new, update timestamp if exists)
     const project = await upsertProject(c.env.DB, repoFullName, projectName)
 
-    // Sync release assets to R2 and record in D1
-    const result = await syncReleaseToR2(
-        c.env.FIRMWARE,
-        c.env.DB,
-        project.id,
-        project.slug,
-        webhookPayload.release
-    )
+    const release = webhookPayload.release
+    const version = release.tag_name.replace(/^v/i, '')
+
+    // Build asset lookup map
+    const assetMap = release.assets.map((a) => ({
+        name: a.name,
+        url: a.browser_download_url,
+        contentType: a.content_type,
+    }))
+
+    // Find manifest files and enqueue each for processing
+    const manifestAssets = release.assets.filter((a) => a.name.endsWith('_manifest.json'))
+    let queued = 0
+
+    for (const manifest of manifestAssets) {
+        const message: ReleaseQueueMessage = {
+            projectId: project.id,
+            projectSlug: project.slug,
+            version,
+            manifestAssetId: manifest.id,
+            manifestUrl: manifest.browser_download_url,
+            manifestFilename: manifest.name,
+            assets: assetMap,
+        }
+        await c.env.RELEASE_QUEUE.send(message)
+        queued++
+    }
 
     return c.json({
-        message: 'Release processed',
+        message: 'Release queued for processing',
         project: project.slug,
-        version: webhookPayload.release.tag_name,
-        stored: result.stored,
-        skipped: result.skipped,
-        errors: result.errors,
+        version: release.tag_name,
+        queued,
     })
 })
 
@@ -368,4 +386,19 @@ app.post('/coredump', async (c) => {
     return c.json(result)
 })
 
-export default app
+// MARK: - Queue Consumer
+
+export default {
+    fetch: app.fetch,
+    async queue(batch: MessageBatch<ReleaseQueueMessage>, env: Env): Promise<void> {
+        for (const message of batch.messages) {
+            try {
+                await processManifest(env.FIRMWARE, env.DB, message.body)
+                message.ack()
+            } catch (error) {
+                console.error('Queue processing error:', error)
+                message.retry()
+            }
+        }
+    },
+}
