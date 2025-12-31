@@ -112,8 +112,18 @@ export async function syncReleaseToR2(
             const manifestData = await manifestResponse.arrayBuffer()
             const manifestJson = JSON.parse(new TextDecoder().decode(manifestData)) as FirmwareManifest
 
+            // Normalize chipFamily values (e.g., "esp32s3" -> "ESP32-S3")
+            if (manifestJson.builds && Array.isArray(manifestJson.builds)) {
+                for (const build of manifestJson.builds) {
+                    if (build.chipFamily && typeof build.chipFamily === 'string') {
+                        build.chipFamily = normalizeChipFamily(build.chipFamily)
+                    }
+                }
+            }
+
             // Store the manifest as "manifest.json" (canonical name)
-            await storeFirmware(bucket, projectSlug, variant, version, 'manifest.json', manifestData, 'application/json')
+            const normalizedManifest = new TextEncoder().encode(JSON.stringify(manifestJson)).buffer as ArrayBuffer
+            await storeFirmware(bucket, projectSlug, variant, version, 'manifest.json', normalizedManifest, 'application/json')
             stored.push(manifestAsset.name)
 
             // Find all referenced files from the manifest
@@ -186,4 +196,16 @@ export async function syncReleaseToR2(
     }
 
     return { stored, skipped, variants, errors }
+}
+
+/**
+ * Normalize ESP chip family names to proper format
+ * e.g., "esp32s3" -> "ESP32-S3", "esp32" -> "ESP32"
+ */
+function normalizeChipFamily(chipFamily: string): string {
+    // Match patterns like esp32, esp32s3, esp32c3, esp32c5, etc.
+    return chipFamily.replace(
+        /^esp32([a-z]\d)?$/i,
+        (_, suffix) => suffix ? `ESP32-${suffix.toUpperCase()}` : 'ESP32'
+    )
 }
