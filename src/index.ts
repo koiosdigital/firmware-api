@@ -251,7 +251,7 @@ app.get('/tz', async (c) => {
         return jsonError(c, 400, 'Missing/invalid client IP')
     }
 
-    const tzinfo = await fetch(`https://ip-api.com/json/${clientIP}?fields=16640`)
+    const tzinfo = await fetch(`http://ip-api.com/json/${clientIP}?fields=16640`)
 
     if (!tzinfo.ok) {
         return jsonError(c, 502, 'Failed to resolve timezone')
