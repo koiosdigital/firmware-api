@@ -251,15 +251,16 @@ app.get('/tz', async (c) => {
         return jsonError(c, 400, 'Missing/invalid client IP')
     }
 
-    const tzinfo = await fetch(`https://api.ipquery.io/${clientIP}`)
+    const tzinfo = await fetch(`https://ip-api.com/json/${clientIP}?fields=16640`)
+
     if (!tzinfo.ok) {
         return jsonError(c, 502, 'Failed to resolve timezone')
     }
 
-    const json = (await tzinfo.json()) as { location?: { timezone?: string } }
+    const json = (await tzinfo.json()) as { timezone?: string }
 
     return c.json({
-        tzname: json.location?.timezone ?? 'UTC',
+        tzname: json.timezone ?? 'UTC',
     })
 })
 
