@@ -75,19 +75,22 @@ export interface FirmwareManifest {
 // API response types
 export type FirmwareUpdateResponse =
     | {
-          error: false
-          update_available: false
-      }
+        error: false
+        tzname: string
+        update_available: false
+    }
     | {
-          error: false
-          update_available: true
-          ota_url: string
-      }
+        error: false
+        update_available: true
+        ota_url: string
+        tzname: string
+    }
     | {
-          error: true
-          update_available: false
-          error_message: string
-      }
+        error: true
+        update_available: false
+        error_message: string
+        tzname: string
+    }
 
 export interface ApiErrorResponse {
     error: true

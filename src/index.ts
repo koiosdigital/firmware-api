@@ -141,6 +141,19 @@ app.get('/projects/:project/:variant/:version', async (c) => {
 // MARK: - OTA Update Check
 
 app.get('/', async (c) => {
+    const clientIP = c.req.header('Cf-Connecting-IP')
+    if (!clientIP || !isValidIpAddress(clientIP)) {
+        return jsonError(c, 400, 'Missing/invalid client IP')
+    }
+
+    const tzinfo = await fetch(`http://ip-api.com/json/${clientIP}?fields=16640`)
+
+    if (!tzinfo.ok) {
+        return jsonError(c, 502, 'Failed to resolve timezone')
+    }
+
+    const timezone = (await tzinfo.json()) as { timezone?: string }
+
     const projectSlug = c.req.header('x-firmware-project')
     const currentVersion = c.req.header('x-firmware-version')
     const projectVariant = c.req.header('x-firmware-variant')
@@ -151,7 +164,7 @@ app.get('/', async (c) => {
 
     // Compatibility: devices reporting 0.0.1 are considered up-to-date
     if (currentVersion.trim() === '0.0.1') {
-        const response: FirmwareUpdateResponse = { error: false, update_available: false }
+        const response: FirmwareUpdateResponse = { error: false, update_available: false, tzname: timezone.timezone ?? 'UTC' }
         return c.json(response)
     }
 
@@ -176,6 +189,7 @@ app.get('/', async (c) => {
             error: true,
             update_available: false,
             error_message: `No releases found for ${projectSlug}/${variant}`,
+            tzname: timezone.timezone ?? 'UTC'
         }
         return c.json(response, 404)
     }
@@ -186,6 +200,7 @@ app.get('/', async (c) => {
             error: true,
             update_available: false,
             error_message: 'Invalid version in storage',
+            tzname: timezone.timezone ?? 'UTC'
         }
         return c.json(response, 500)
     }
@@ -193,7 +208,7 @@ app.get('/', async (c) => {
     const hasUpdate = compareSemver(current, latest) < 0
 
     if (!hasUpdate) {
-        const response: FirmwareUpdateResponse = { error: false, update_available: false }
+        const response: FirmwareUpdateResponse = { error: false, update_available: false, tzname: timezone.timezone ?? 'UTC' }
         return c.json(response)
     }
 
@@ -203,6 +218,7 @@ app.get('/', async (c) => {
             error: true,
             update_available: false,
             error_message: `No manifest found for ${projectSlug}/${variant}/${latestVersion}`,
+            tzname: timezone.timezone ?? 'UTC'
         }
         return c.json(response, 502)
     }
@@ -231,6 +247,7 @@ app.get('/', async (c) => {
             error: true,
             update_available: false,
             error_message: `No app binary found in manifest for ${variant}`,
+            tzname: timezone.timezone ?? 'UTC'
         }
         return c.json(response, 502)
     }
@@ -239,6 +256,7 @@ app.get('/', async (c) => {
         error: false,
         update_available: true,
         ota_url: appBinaryUrl,
+        tzname: timezone.timezone ?? 'UTC'
     }
     return c.json(response)
 })
