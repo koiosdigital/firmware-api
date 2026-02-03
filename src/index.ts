@@ -310,7 +310,7 @@ app.post('/webhook/github', async (c) => {
     }
 
     // Only process release.published and release.edited events
-    const validActions = ['published']
+    const validActions = ['published', 'edited']
     if (!validActions.includes(webhookPayload.action) || !webhookPayload.release) {
         return c.json({ message: 'Event ignored' }, 200)
     }
