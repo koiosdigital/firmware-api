@@ -1,5 +1,24 @@
-import type { FirmwareManifest, ReleaseQueueMessage } from './types'
+import type { Env, FirmwareManifest, ReleaseQueueMessage } from './types'
 import { insertRelease, getProcessedAssetIds, markAssetProcessed } from './db'
+import { getInstallationToken } from './github'
+
+/**
+ * Fetch a GitHub release asset, using authenticated API if token available
+ */
+async function fetchGitHubAsset(browserUrl: string, apiUrl: string, token?: string): Promise<Response> {
+    if (token) {
+        return fetch(apiUrl, {
+            headers: {
+                'User-Agent': 'Koios OTA Updater',
+                Authorization: `Bearer ${token}`,
+                Accept: 'application/octet-stream',
+            },
+        })
+    }
+    return fetch(browserUrl, {
+        headers: { 'User-Agent': 'Koios OTA Updater' },
+    })
+}
 
 /**
  * Build the R2 key for a firmware file
@@ -72,9 +91,10 @@ export async function getManifest(
 export async function processManifest(
     bucket: R2Bucket,
     db: D1Database,
-    message: ReleaseQueueMessage
+    message: ReleaseQueueMessage,
+    env: Env
 ): Promise<{ stored: string[]; errors: string[] }> {
-    const { projectId, projectSlug, version, manifestAssetId, manifestUrl, manifestFilename, assets } = message
+    const { projectId, projectSlug, version, manifestAssetId, manifestUrl, manifestApiUrl, manifestFilename, assets, installationId } = message
     const stored: string[] = []
     const errors: string[] = []
 
@@ -82,6 +102,12 @@ export async function processManifest(
     const processedIds = await getProcessedAssetIds(db, [manifestAssetId])
     if (processedIds.has(manifestAssetId)) {
         return { stored: [], errors: [] }
+    }
+
+    // Get installation token if GitHub App is configured and installation ID is present
+    let ghToken: string | undefined
+    if (env.GITHUB_APP_ID && env.GITHUB_APP_PRIVATE_KEY && installationId) {
+        ghToken = await getInstallationToken(env.GITHUB_APP_ID, env.GITHUB_APP_PRIVATE_KEY, installationId)
     }
 
     // Build asset lookup map
@@ -92,9 +118,7 @@ export async function processManifest(
 
     try {
         // Download and parse the manifest
-        const manifestResponse = await fetch(manifestUrl, {
-            headers: { 'User-Agent': 'Koios OTA Updater' },
-        })
+        const manifestResponse = await fetchGitHubAsset(manifestUrl, manifestApiUrl, ghToken)
         if (!manifestResponse.ok) {
             throw new Error(`Failed to fetch manifest: ${manifestResponse.statusText}`)
         }
@@ -138,9 +162,7 @@ export async function processManifest(
                 continue
             }
 
-            const fileResponse = await fetch(asset.url, {
-                headers: { 'User-Agent': 'Koios OTA Updater' },
-            })
+            const fileResponse = await fetchGitHubAsset(asset.url, asset.apiUrl, ghToken)
             if (!fileResponse.ok) {
                 errors.push(`Failed to fetch ${filename}: ${fileResponse.statusText}`)
                 continue
@@ -155,9 +177,7 @@ export async function processManifest(
         const elfFilename = `${variant}.elf`
         const elfAsset = assetMap.get(elfFilename)
         if (elfAsset) {
-            const elfResponse = await fetch(elfAsset.url, {
-                headers: { 'User-Agent': 'Koios OTA Updater' },
-            })
+            const elfResponse = await fetchGitHubAsset(elfAsset.url, elfAsset.apiUrl, ghToken)
             if (elfResponse.ok) {
                 const elfData = await elfResponse.arrayBuffer()
                 await storeFirmware(bucket, projectSlug, variant, version, elfFilename, elfData, elfAsset.contentType)

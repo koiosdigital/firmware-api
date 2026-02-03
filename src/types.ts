@@ -4,6 +4,8 @@ export interface Env {
     DB: D1Database
     RELEASE_QUEUE: Queue<ReleaseQueueMessage>
     GITHUB_WEBHOOK_SECRET: string
+    GITHUB_APP_ID?: string
+    GITHUB_APP_PRIVATE_KEY?: string
 }
 
 // Queue message for processing release manifests
@@ -13,8 +15,10 @@ export interface ReleaseQueueMessage {
     version: string
     manifestAssetId: number
     manifestUrl: string
+    manifestApiUrl: string
     manifestFilename: string
-    assets: { name: string; url: string; contentType: string }[]
+    assets: { name: string; url: string; apiUrl: string; contentType: string }[]
+    installationId?: number
 }
 
 // Project configuration (from D1 database)
@@ -31,6 +35,7 @@ export interface Project {
 export interface GitHubReleaseAsset {
     id: number
     name: string
+    url: string  // API URL for authenticated downloads
     browser_download_url: string
     size: number
     content_type: string
@@ -49,6 +54,9 @@ export interface GitHubWebhookPayload {
     release?: GitHubRelease
     repository?: {
         full_name: string
+    }
+    installation?: {
+        id: number
     }
 }
 

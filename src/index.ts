@@ -332,10 +332,11 @@ app.post('/webhook/github', async (c) => {
     const release = webhookPayload.release
     const version = release.tag_name.replace(/^v/i, '')
 
-    // Build asset lookup map
+    // Build asset lookup map with both browser and API URLs
     const assetMap = release.assets.map((a) => ({
         name: a.name,
         url: a.browser_download_url,
+        apiUrl: a.url,
         contentType: a.content_type,
     }))
 
@@ -350,8 +351,10 @@ app.post('/webhook/github', async (c) => {
             version,
             manifestAssetId: manifest.id,
             manifestUrl: manifest.browser_download_url,
+            manifestApiUrl: manifest.url,
             manifestFilename: manifest.name,
             assets: assetMap,
+            installationId: webhookPayload.installation?.id,
         }
         await c.env.RELEASE_QUEUE.send(message)
         queued++
@@ -412,7 +415,7 @@ export default {
     async queue(batch: MessageBatch<ReleaseQueueMessage>, env: Env): Promise<void> {
         for (const message of batch.messages) {
             try {
-                await processManifest(env.FIRMWARE, env.DB, message.body)
+                await processManifest(env.FIRMWARE, env.DB, message.body, env)
                 message.ack()
             } catch (error) {
                 console.error('Queue processing error:', error)
